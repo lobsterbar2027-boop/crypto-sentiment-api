@@ -1,0 +1,19 @@
+{
+  "name": "crypto-sentiment-api",
+  "version": "1.0.0",
+  "description": "Real-time crypto sentiment analysis API with x402 payments",
+  "main": "sentiment-api.js",
+  "scripts": {
+    "start": "node sentiment-api.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "node-fetch": "^2.6.12",
+    "sentiment": "^5.0.2",
+    "vader-sentiment": "^1.1.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
