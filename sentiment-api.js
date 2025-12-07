@@ -1,4 +1,3 @@
-// sentiment-api.js - Production Ready with Real x402 Verification
 const express = require('express');
 const cors = require('cors');
 const Sentiment = require('sentiment');
@@ -13,22 +12,18 @@ const sentiment = new Sentiment();
 app.use(cors());
 app.use(express.json());
 
-// Simple in-memory database for tracking payments
 const paymentsDB = [];
 
-// Rate limiter - prevents spam
 const limiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 100, // 100 requests per minute per IP
+  windowMs: 60 * 1000,
+  max: 100,
   message: { error: 'Too many requests, please slow down' }
 });
 
-// x402 Payment Middleware - REAL VERIFICATION
 const x402Middleware = (price) => {
   return async (req, res, next) => {
     const paymentHeader = req.headers['x-payment'];
     
-    // No payment header = show payment requirements
     if (!paymentHeader) {
       return res.status(402).json({
         error: 'Payment Required',
@@ -46,16 +41,11 @@ const x402Middleware = (price) => {
       });
     }
     
-    // Verify payment
     try {
-      // Decode the payment header
-      const paymentData = JSON.parse(
-        Buffer.from(paymentHeader, 'base64').toString()
-      );
+      const paymentData = JSON.parse(Buffer.from(paymentHeader, 'base64').toString());
       
-      console.log('📝 Payment received:', paymentData);
+      console.log('Payment received:', paymentData);
       
-      // Basic validation
       if (!paymentData.signature || !paymentData.message) {
         return res.status(400).json({ 
           error: 'Invalid payment format',
@@ -63,19 +53,14 @@ const x402Middleware = (price) => {
         });
       }
       
-      // Verify the signature matches the message
       const message = paymentData.message;
       const signature = paymentData.signature;
-      
-      // Recover the address that signed this message
       const recoveredAddress = ethers.verifyMessage(message, signature);
       
-      console.log('🔐 Recovered signer:', recoveredAddress);
+      console.log('Recovered signer:', recoveredAddress);
       
-      // Verify payment details in the message
       const messageObj = JSON.parse(message);
       
-      // Check amount
       if (messageObj.amount !== price) {
         return res.status(403).json({ 
           error: 'Invalid payment amount',
@@ -84,27 +69,21 @@ const x402Middleware = (price) => {
         });
       }
       
-      // Check recipient
       if (messageObj.recipient.toLowerCase() !== process.env.WALLET_ADDRESS.toLowerCase()) {
         return res.status(403).json({ 
-          error: 'Invalid payment recipient',
-          expected: process.env.WALLET_ADDRESS,
-          received: messageObj.recipient
+          error: 'Invalid payment recipient'
         });
       }
       
-      // Check if we've seen this payment before (prevent replay attacks)
       const paymentId = signature.slice(0, 20);
       const alreadyUsed = paymentsDB.find(p => p.id === paymentId);
       
       if (alreadyUsed) {
         return res.status(403).json({ 
-          error: 'Payment already used',
-          message: 'This payment has already been processed'
+          error: 'Payment already used'
         });
       }
       
-      // Log successful payment
       const paymentRecord = {
         id: paymentId,
         timestamp: new Date().toISOString(),
@@ -115,17 +94,15 @@ const x402Middleware = (price) => {
       
       paymentsDB.push(paymentRecord);
       
-      // Also log to file for persistence
       const logLine = `${paymentRecord.timestamp},${paymentRecord.amount},${paymentRecord.coin},${paymentRecord.signer}\n`;
       fs.appendFileSync('payments.log', logLine);
       
-      console.log('✅ PAYMENT VERIFIED:', paymentRecord);
+      console.log('PAYMENT VERIFIED:', paymentRecord);
       
-      // Payment verified, continue to API
       next();
       
     } catch (error) {
-      console.error('❌ Payment verification failed:', error.message);
+      console.error('Payment verification failed:', error.message);
       return res.status(400).json({ 
         error: 'Payment verification failed',
         message: error.message
@@ -134,7 +111,6 @@ const x402Middleware = (price) => {
   };
 };
 
-// Fetch Reddit data
 async function fetchRedditData(coin) {
   try {
     const subreddits = ['CryptoCurrency', 'Bitcoin', 'ethereum', 'CryptoMarkets'];
@@ -179,7 +155,6 @@ async function fetchRedditData(coin) {
   }
 }
 
-// Analyze sentiments
 function analyzeSentiments(texts) {
   if (texts.length === 0) {
     return {
@@ -216,12 +191,11 @@ function analyzeSentiments(texts) {
   };
 }
 
-// Main sentiment endpoint with rate limiting and payment
 app.get('/v1/sentiment/:coin', limiter, x402Middleware('0.03'), async (req, res) => {
   try {
     const coin = req.params.coin.toUpperCase();
     
-    console.log(`🔍 Analyzing sentiment for ${coin}...`);
+    console.log(`Analyzing sentiment for ${coin}...`);
     
     const redditData = await fetchRedditData(coin);
     const analysis = analyzeSentiments(redditData);
@@ -249,12 +223,12 @@ app.get('/v1/sentiment/:coin', limiter, x402Middleware('0.03'), async (req, res)
       cost: '0.03 USDC'
     };
     
-    console.log(`✅ Sentiment analysis complete for ${coin}`);
+    console.log(`Sentiment analysis complete for ${coin}`);
     
     res.json(response);
     
   } catch (error) {
-    console.error('❌ Analysis error:', error);
+    console.error('Analysis error:', error);
     res.status(500).json({ 
       error: 'Analysis failed', 
       message: error.message 
@@ -262,7 +236,6 @@ app.get('/v1/sentiment/:coin', limiter, x402Middleware('0.03'), async (req, res)
   }
 });
 
-// Admin endpoint - see your revenue
 app.get('/admin/payments', (req, res) => {
   const apiKey = req.headers['x-admin-key'];
   
@@ -275,11 +248,10 @@ app.get('/admin/payments', (req, res) => {
   res.json({
     totalPayments: paymentsDB.length,
     totalRevenue: `$${totalRevenue.toFixed(2)}`,
-    payments: paymentsDB.slice(-50) // Last 50 payments
+    payments: paymentsDB.slice(-50)
   });
 });
 
-// Health check
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy', 
@@ -290,7 +262,6 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Documentation
 app.get('/', (req, res) => {
   res.json({
     name: 'CryptoSentiment API',
@@ -312,7 +283,6 @@ app.get('/', (req, res) => {
       'Real payment verification',
       'Rate limiting protection',
       'Payment tracking database',
-      'Multi-source sentiment analysis',
       'Replay attack prevention'
     ]
   });
@@ -320,10 +290,7 @@ app.get('/', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 CryptoSentiment API running on port ${PORT}`);
-  console.log(`💰 Payment verification: ENABLED`);
-  console.log(`🔒 Rate limiting: ENABLED`);
-  console.log(`📊 Payment tracking: ENABLED`);
+  console.log(`CryptoSentiment API running on port ${PORT}`);
 });
 
 module.exports = app;
