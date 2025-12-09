@@ -31,7 +31,7 @@ const x402Middleware = (price) => {
     if (!paymentHeader) {
       return res.status(402).json({
         x402Version: 1,
-        error: '',
+        error: 'X-PAYMENT header is required',
         accepts: [{
           scheme: 'exact',
           network: 'base',
@@ -274,7 +274,7 @@ function analyzeSentiments(texts) {
 app.get('/', (req, res) => {
   return res.status(402).json({
     x402Version: 1,
-    error: '',
+    error: 'X-PAYMENT header is required',
     accepts: [{
       scheme: 'exact',
       network: 'base',
