@@ -38,13 +38,13 @@ const x402Middleware = (price) => {
           resource: `https://crypto-sentiment-api-production.up.railway.app${req.path}`,
           description: `Real-time crypto sentiment analysis for ${req.params.coin || 'cryptocurrency'}`,
           mimeType: 'application/json',
+          outputSchema: null, // Must be explicitly null per x402 spec
           payTo: process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f',
           maxTimeoutSeconds: 60,
           asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
           extra: {
             name: 'USD Coin',
-            version: '2',
-            facilitator: 'https://facilitator.coinbase.com'
+            version: '2'
           }
         }],
         error: null
@@ -401,13 +401,13 @@ app.get('/', (req, res) => {
       resource: 'https://crypto-sentiment-api-production.up.railway.app/v1/sentiment/BTC',
       description: 'Real-time crypto sentiment analysis - Social media & Reddit sentiment for BTC, ETH, SOL and other cryptocurrencies',
       mimeType: 'application/json',
+      outputSchema: null, // Must be explicitly null
       payTo: process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f',
       maxTimeoutSeconds: 60,
       asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC contract on Base
       extra: {
         name: 'USD Coin',
-        version: '2',
-        facilitator: 'https://facilitator.coinbase.com'
+        version: '2'
       }
     }],
     error: null
