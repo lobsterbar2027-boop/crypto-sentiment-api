@@ -405,6 +405,7 @@ app.get('/', (req, res) => {
       payTo: process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f',
       maxTimeoutSeconds: 60,
       asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC contract on Base
+      facilitator: 'https://facilitator.coinbase.com', // Add facilitator here per some implementations
       extra: {
         name: 'USD Coin',
         version: '2'
