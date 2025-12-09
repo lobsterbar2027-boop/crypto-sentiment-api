@@ -47,7 +47,7 @@ const x402Middleware = (price) => {
             version: '2'
           }
         }],
-        error: null
+        error: '' // Must be empty string, not null!
       });
     }
     
@@ -410,7 +410,7 @@ app.get('/', (req, res) => {
         version: '2'
       }
     }],
-    error: null
+    error: '' // Must be empty string, not null!
   });
 });
 
