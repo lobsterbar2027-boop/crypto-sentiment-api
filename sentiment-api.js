@@ -12,22 +12,18 @@ const sentiment = new Sentiment();
 app.use(cors());
 app.use(express.json());
 
-// In-memory payment tracking
 const paymentsDB = [];
 
-// Rate limiting
 const limiter = rateLimit({
   windowMs: 60 * 1000,
   max: 100,
   message: { error: 'Too many requests, please slow down' }
 });
 
-// x402 Middleware with PROPER SCHEMA AND FIELD ORDER
 const x402Middleware = (price) => {
   return async (req, res, next) => {
     const paymentHeader = req.headers['x-payment'];
     
-    // No payment header = return 402 with CORRECT x402 schema
     if (!paymentHeader) {
       return res.status(402).json({
         x402Version: 1,
@@ -41,8 +37,26 @@ const x402Middleware = (price) => {
           resource: `https://crypto-sentiment-api-production.up.railway.app${req.path}`,
           description: `Real-time crypto sentiment analysis for ${req.params.coin || 'cryptocurrency'}`,
           mimeType: 'application/json',
-          outputSchema: null,
           maxTimeoutSeconds: 60,
+          outputSchema: {
+            input: {
+              type: "http",
+              method: "GET"
+            },
+            output: {
+              coin: { type: "string" },
+              signal: { type: "string" },
+              score: { type: "number" },
+              positive: { type: "number" },
+              negative: { type: "number" },
+              neutral: { type: "number" },
+              mentions: { type: "number" },
+              trend: { type: "string" },
+              sources: { type: "array" },
+              timestamp: { type: "string" },
+              cost: { type: "string" }
+            }
+          },
           extra: {
             name: 'USD Coin',
             version: '2'
@@ -284,8 +298,26 @@ app.get('/', (req, res) => {
       resource: 'https://crypto-sentiment-api-production.up.railway.app/v1/sentiment/BTC',
       description: 'Real-time crypto sentiment analysis - Social media & Reddit sentiment for BTC, ETH, SOL and other cryptocurrencies',
       mimeType: 'application/json',
-      outputSchema: null,
       maxTimeoutSeconds: 60,
+      outputSchema: {
+        input: {
+          type: "http",
+          method: "GET"
+        },
+        output: {
+          coin: { type: "string" },
+          signal: { type: "string", enum: ["STRONG BUY", "BUY", "NEUTRAL", "SELL", "STRONG SELL"] },
+          score: { type: "number" },
+          positive: { type: "number" },
+          negative: { type: "number" },
+          neutral: { type: "number" },
+          mentions: { type: "number" },
+          trend: { type: "string" },
+          sources: { type: "array" },
+          timestamp: { type: "string" },
+          cost: { type: "string" }
+        }
+      },
       extra: {
         name: 'USD Coin',
         version: '2'
@@ -297,7 +329,7 @@ app.get('/', (req, res) => {
 app.get('/info', (req, res) => {
   res.json({
     name: 'CryptoSentiment API',
-    version: '1.3.0',
+    version: '1.4.0',
     status: 'Production Ready',
     pricing: '$0.03 USDC per query via x402',
     endpoints: {
@@ -317,6 +349,7 @@ app.get('/info', (req, res) => {
     },
     features: [
       'x402 protocol compliant',
+      'x402scan compatible with outputSchema',
       'Real payment verification via Coinbase facilitator',
       'On-chain verification fallback',
       'Rate limiting (100 req/min)',
@@ -392,20 +425,21 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy', 
     service: 'crypto-sentiment-api',
-    version: '1.3.0',
+    version: '1.4.0',
     uptime: Math.floor(process.uptime()),
     totalPayments: paymentsDB.length,
     x402: 'enabled',
-    x402compliant: true
+    x402compliant: true,
+    x402scanCompliant: true
   });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 CryptoSentiment API running on port ${PORT}`);
-  console.log(`💰 x402 payments enabled (v1.3.0)`);
+  console.log(`💰 x402 payments enabled (v1.4.0)`);
   console.log(`📊 Payment tracking: ${paymentsDB.length} payments processed`);
-  console.log(`✅ x402 spec compliant`);
+  console.log(`✅ x402scan compliant with outputSchema`);
 });
 
 module.exports = app;
