@@ -387,16 +387,46 @@ app.get('/health', (req, res) => {
 });
 
 /**
- * Root endpoint - API documentation
+ * Root endpoint - ALWAYS returns 402 (x402scan compatible)
+ * This is required for x402scan to detect and list the service
  */
 app.get('/', (req, res) => {
+  // ALWAYS return 402 at root so x402scan can detect us
+  return res.status(402).json({
+    x402Version: 1,
+    accepts: [{
+      scheme: 'exact',
+      network: 'base',
+      maxAmountRequired: '30000', // 0.03 USDC in atomic units (6 decimals)
+      resource: 'https://crypto-sentiment-api-production.up.railway.app/v1/sentiment/BTC',
+      description: 'Real-time crypto sentiment analysis - Social media & Reddit sentiment for BTC, ETH, SOL and other cryptocurrencies',
+      mimeType: 'application/json',
+      payTo: process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f',
+      maxTimeoutSeconds: 60,
+      asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC contract on Base
+      extra: {
+        name: 'USD Coin',
+        version: '2',
+        facilitator: 'https://facilitator.coinbase.com'
+      }
+    }],
+    error: null
+  });
+});
+
+/**
+ * API info endpoint (for humans who want to read about the API)
+ */
+app.get('/info', (req, res) => {
   res.json({
     name: 'CryptoSentiment API',
     version: '1.2.0',
     status: 'Production Ready',
     pricing: '$0.03 USDC per query via x402',
     endpoints: {
-      sentiment: 'GET /v1/sentiment/:coin - Real-time crypto sentiment analysis',
+      root: 'GET / - x402 payment requirements (returns 402)',
+      sentiment: 'GET /v1/sentiment/:coin - Real-time crypto sentiment analysis (requires payment)',
+      info: 'GET /info - API documentation (this page)',
       health: 'GET /health - API health status',
       admin: 'GET /admin/payments - Payment history (requires X-Admin-Key)'
     },
@@ -417,7 +447,14 @@ app.get('/', (req, res) => {
       'Payment tracking and logging'
     ],
     supportedCoins: ['BTC', 'ETH', 'SOL', 'DOGE', 'ADA', 'XRP', 'DOT', 'MATIC', 'LINK', 'UNI'],
-    documentation: 'https://x402.org/docs'
+    documentation: 'https://x402.org/docs',
+    howToUse: [
+      '1. Send GET request to /v1/sentiment/:coin without X-PAYMENT header',
+      '2. Receive 402 response with payment requirements',
+      '3. Make USDC payment on Base network',
+      '4. Retry request with X-PAYMENT header containing payment proof',
+      '5. Receive sentiment analysis data'
+    ]
   });
 });
 
