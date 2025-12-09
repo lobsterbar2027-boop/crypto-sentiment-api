@@ -22,32 +22,33 @@ const limiter = rateLimit({
   message: { error: 'Too many requests, please slow down' }
 });
 
-// x402 Middleware with PROPER SCHEMA
+// x402 Middleware with PROPER SCHEMA AND FIELD ORDER
 const x402Middleware = (price) => {
   return async (req, res, next) => {
     const paymentHeader = req.headers['x-payment'];
     
     // No payment header = return 402 with CORRECT x402 schema
+    // Field order MUST match spec exactly!
     if (!paymentHeader) {
       return res.status(402).json({
         x402Version: 1,
+        error: '',
         accepts: [{
           scheme: 'exact',
           network: 'base',
-          maxAmountRequired: (parseFloat(price) * 1000000).toString(), // Convert to USDC atomic units (6 decimals)
+          maxAmountRequired: (parseFloat(price) * 1000000).toString(),
+          asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+          payTo: process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f',
           resource: `https://crypto-sentiment-api-production.up.railway.app${req.path}`,
           description: `Real-time crypto sentiment analysis for ${req.params.coin || 'cryptocurrency'}`,
           mimeType: 'application/json',
-          outputSchema: null, // Must be explicitly null per x402 spec
-          payTo: process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f',
+          outputSchema: null,
           maxTimeoutSeconds: 60,
-          asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
           extra: {
             name: 'USD Coin',
             version: '2'
           }
-        }],
-        error: '' // Must be empty string, not null!
+        }]
       });
     }
     
@@ -304,168 +305,8 @@ function analyzeSentiments(texts) {
 // ============================================
 
 /**
- * Main sentiment analysis endpoint (x402 protected)
- */
-app.get('/v1/sentiment/:coin', limiter, x402Middleware('0.03'), async (req, res) => {
-  try {
-    const coin = req.params.coin.toUpperCase();
-    
-    console.log(`🔍 Analyzing sentiment for ${coin}...`);
-    
-    const redditData = await fetchRedditData(coin);
-    const analysis = analyzeSentiments(redditData);
-    const compositeScore = analysis.vaderAvg;
-    
-    let signal = 'NEUTRAL';
-    if (compositeScore > 0.15) signal = 'STRONG BUY';
-    else if (compositeScore > 0.05) signal = 'BUY';
-    else if (compositeScore < -0.15) signal = 'STRONG SELL';
-    else if (compositeScore < -0.05) signal = 'SELL';
-    
-    const trend = compositeScore > 0 ? 'up' : 'down';
-    
-    const response = {
-      coin,
-      signal,
-      score: parseFloat(compositeScore.toFixed(3)),
-      positive: analysis.positive,
-      negative: analysis.negative,
-      neutral: analysis.neutral,
-      mentions: analysis.totalMentions,
-      trend,
-      sources: ['reddit'],
-      timestamp: new Date().toISOString(),
-      cost: '0.03 USDC'
-    };
-    
-    console.log(`✅ Sentiment analysis complete for ${coin}: ${signal}`);
-    
-    res.json(response);
-    
-  } catch (error) {
-    console.error('Analysis error:', error);
-    res.status(500).json({ 
-      error: 'Analysis failed', 
-      message: error.message 
-    });
-  }
-});
-
-/**
- * Admin endpoint to view payments
- */
-app.get('/admin/payments', (req, res) => {
-  const apiKey = req.headers['x-admin-key'];
-  
-  if (apiKey !== process.env.ADMIN_KEY) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  
-  const totalRevenue = paymentsDB.length * 0.03;
-  
-  res.json({
-    totalPayments: paymentsDB.length,
-    totalRevenue: `$${totalRevenue.toFixed(2)}`,
-    recentPayments: paymentsDB.slice(-50),
-    status: 'operational'
-  });
-});
-
-/**
- * Health check endpoint
- */
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'healthy', 
-    service: 'crypto-sentiment-api',
-    version: '1.2.0',
-    uptime: Math.floor(process.uptime()),
-    totalPayments: paymentsDB.length,
-    x402: 'enabled',
-    x402compliant: true
-  });
-});
-
-/**
  * Root endpoint - ALWAYS returns 402 (x402scan compatible)
  * This is required for x402scan to detect and list the service
  */
 app.get('/', (req, res) => {
-  // ALWAYS return 402 at root so x402scan can detect us
-  return res.status(402).json({
-    x402Version: 1,
-    accepts: [{
-      scheme: 'exact',
-      network: 'base',
-      maxAmountRequired: '30000', // 0.03 USDC in atomic units (6 decimals)
-      resource: 'https://crypto-sentiment-api-production.up.railway.app/v1/sentiment/BTC',
-      description: 'Real-time crypto sentiment analysis - Social media & Reddit sentiment for BTC, ETH, SOL and other cryptocurrencies',
-      mimeType: 'application/json',
-      outputSchema: null, // Must be explicitly null
-      payTo: process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f',
-      maxTimeoutSeconds: 60,
-      asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC contract on Base
-      facilitator: 'https://facilitator.coinbase.com', // Add facilitator here per some implementations
-      extra: {
-        name: 'USD Coin',
-        version: '2'
-      }
-    }],
-    error: '' // Must be empty string, not null!
-  });
-});
-
-/**
- * API info endpoint (for humans who want to read about the API)
- */
-app.get('/info', (req, res) => {
-  res.json({
-    name: 'CryptoSentiment API',
-    version: '1.2.0',
-    status: 'Production Ready',
-    pricing: '$0.03 USDC per query via x402',
-    endpoints: {
-      root: 'GET / - x402 payment requirements (returns 402)',
-      sentiment: 'GET /v1/sentiment/:coin - Real-time crypto sentiment analysis (requires payment)',
-      info: 'GET /info - API documentation (this page)',
-      health: 'GET /health - API health status',
-      admin: 'GET /admin/payments - Payment history (requires X-Admin-Key)'
-    },
-    x402: {
-      facilitator: 'https://facilitator.coinbase.com',
-      network: 'base',
-      currency: 'USDC',
-      amount: '0.03',
-      recipient: process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f',
-      usdcContract: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
-    },
-    features: [
-      'x402 protocol compliant',
-      'Real payment verification via Coinbase facilitator',
-      'On-chain verification fallback',
-      'Rate limiting (100 req/min)',
-      'Replay attack prevention',
-      'Payment tracking and logging'
-    ],
-    supportedCoins: ['BTC', 'ETH', 'SOL', 'DOGE', 'ADA', 'XRP', 'DOT', 'MATIC', 'LINK', 'UNI'],
-    documentation: 'https://x402.org/docs',
-    howToUse: [
-      '1. Send GET request to /v1/sentiment/:coin without X-PAYMENT header',
-      '2. Receive 402 response with payment requirements',
-      '3. Make USDC payment on Base network',
-      '4. Retry request with X-PAYMENT header containing payment proof',
-      '5. Receive sentiment analysis data'
-    ]
-  });
-});
-
-// Start the server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 CryptoSentiment API running on port ${PORT}`);
-  console.log(`💰 x402 payments enabled (v1.2.0)`);
-  console.log(`📊 Payment tracking: ${paymentsDB.length} payments processed`);
-  console.log(`✅ x402 spec compliant with proper schema`);
-});
-
-module.exports = app;
+  // ALWAYS return 402 at r
