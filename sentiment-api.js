@@ -28,7 +28,6 @@ const x402Middleware = (price) => {
     const paymentHeader = req.headers['x-payment'];
     
     // No payment header = return 402 with CORRECT x402 schema
-    // Field order MUST match spec exactly!
     if (!paymentHeader) {
       return res.status(402).json({
         x402Version: 1,
@@ -53,7 +52,6 @@ const x402Middleware = (price) => {
     }
     
     try {
-      // Decode the payment header
       const paymentData = JSON.parse(Buffer.from(paymentHeader, 'base64').toString());
       
       console.log('Payment received:', {
@@ -61,7 +59,6 @@ const x402Middleware = (price) => {
         timestamp: new Date().toISOString()
       });
       
-      // CRITICAL: Verify with Coinbase facilitator
       const isValid = await verifyPaymentWithFacilitator(paymentData, price);
       
       if (!isValid) {
@@ -71,7 +68,6 @@ const x402Middleware = (price) => {
         });
       }
       
-      // Check for replay attacks (payment already used)
       const paymentId = paymentData.transactionHash || paymentData.signature?.slice(0, 20);
       const alreadyUsed = paymentsDB.find(p => p.id === paymentId);
       
@@ -82,7 +78,6 @@ const x402Middleware = (price) => {
         });
       }
       
-      // Record the payment
       const paymentRecord = {
         id: paymentId,
         timestamp: new Date().toISOString(),
@@ -93,7 +88,6 @@ const x402Middleware = (price) => {
       
       paymentsDB.push(paymentRecord);
       
-      // Log to file
       const logLine = `${paymentRecord.timestamp},${paymentRecord.amount},${paymentRecord.coin},${paymentRecord.from}\n`;
       try {
         fs.appendFileSync('payments.log', logLine);
@@ -102,8 +96,6 @@ const x402Middleware = (price) => {
       }
       
       console.log('✅ PAYMENT VERIFIED:', paymentRecord);
-      
-      // Payment verified - continue to the actual endpoint
       next();
       
     } catch (error) {
@@ -116,14 +108,9 @@ const x402Middleware = (price) => {
   };
 };
 
-/**
- * REAL payment verification using Coinbase facilitator
- */
 async function verifyPaymentWithFacilitator(paymentData, expectedAmount) {
   try {
     const fetch = (await import('node-fetch')).default;
-    
-    // Call Coinbase facilitator's verify endpoint
     const facilitatorUrl = 'https://facilitator.coinbase.com/verify';
     
     const verifyResponse = await fetch(facilitatorUrl, {
@@ -147,7 +134,6 @@ async function verifyPaymentWithFacilitator(paymentData, expectedAmount) {
     
     const verifyResult = await verifyResponse.json();
     
-    // Check if facilitator confirmed the payment
     if (verifyResult.verified === true && verifyResult.status === 'confirmed') {
       console.log('✅ Payment verified by facilitator');
       return true;
@@ -158,18 +144,12 @@ async function verifyPaymentWithFacilitator(paymentData, expectedAmount) {
     
   } catch (error) {
     console.error('❌ Facilitator verification error:', error.message);
-    
-    // FALLBACK: If facilitator is unreachable, use on-chain verification
     return await verifyPaymentOnChain(paymentData, expectedAmount);
   }
 }
 
-/**
- * FALLBACK: Direct on-chain verification if facilitator is down
- */
 async function verifyPaymentOnChain(paymentData, expectedAmount) {
   try {
-    // Connect to Base network
     const provider = new ethers.JsonRpcProvider(
       process.env.BASE_RPC_URL || 'https://mainnet.base.org'
     );
@@ -181,7 +161,6 @@ async function verifyPaymentOnChain(paymentData, expectedAmount) {
       return false;
     }
     
-    // Get the transaction from Base
     const tx = await provider.getTransaction(txHash);
     
     if (!tx) {
@@ -189,7 +168,6 @@ async function verifyPaymentOnChain(paymentData, expectedAmount) {
       return false;
     }
     
-    // Verify transaction is confirmed
     const receipt = await provider.getTransactionReceipt(txHash);
     
     if (!receipt || receipt.status !== 1) {
@@ -197,7 +175,6 @@ async function verifyPaymentOnChain(paymentData, expectedAmount) {
       return false;
     }
     
-    // Verify recipient matches
     const expectedRecipient = (process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f').toLowerCase();
     
     if (tx.to?.toLowerCase() !== expectedRecipient.toLowerCase()) {
@@ -214,9 +191,6 @@ async function verifyPaymentOnChain(paymentData, expectedAmount) {
   }
 }
 
-/**
- * Fetch Reddit data for sentiment analysis
- */
 async function fetchRedditData(coin) {
   try {
     const subreddits = ['CryptoCurrency', 'Bitcoin', 'ethereum', 'CryptoMarkets'];
@@ -261,9 +235,6 @@ async function fetchRedditData(coin) {
   }
 }
 
-/**
- * Analyze sentiment using VADER
- */
 function analyzeSentiments(texts) {
   if (texts.length === 0) {
     return {
@@ -300,13 +271,141 @@ function analyzeSentiments(texts) {
   };
 }
 
-// ============================================
-// API ENDPOINTS
-// ============================================
-
-/**
- * Root endpoint - ALWAYS returns 402 (x402scan compatible)
- * This is required for x402scan to detect and list the service
- */
 app.get('/', (req, res) => {
-  // ALWAYS return 402 at r
+  return res.status(402).json({
+    x402Version: 1,
+    error: '',
+    accepts: [{
+      scheme: 'exact',
+      network: 'base',
+      maxAmountRequired: '30000',
+      asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      payTo: process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f',
+      resource: 'https://crypto-sentiment-api-production.up.railway.app/v1/sentiment/BTC',
+      description: 'Real-time crypto sentiment analysis - Social media & Reddit sentiment for BTC, ETH, SOL and other cryptocurrencies',
+      mimeType: 'application/json',
+      outputSchema: null,
+      maxTimeoutSeconds: 60,
+      extra: {
+        name: 'USD Coin',
+        version: '2'
+      }
+    }]
+  });
+});
+
+app.get('/info', (req, res) => {
+  res.json({
+    name: 'CryptoSentiment API',
+    version: '1.3.0',
+    status: 'Production Ready',
+    pricing: '$0.03 USDC per query via x402',
+    endpoints: {
+      root: 'GET / - x402 payment requirements (returns 402)',
+      sentiment: 'GET /v1/sentiment/:coin - Real-time crypto sentiment analysis (requires payment)',
+      info: 'GET /info - API documentation (this page)',
+      health: 'GET /health - API health status',
+      admin: 'GET /admin/payments - Payment history (requires X-Admin-Key)'
+    },
+    x402: {
+      facilitator: 'https://facilitator.coinbase.com',
+      network: 'base',
+      currency: 'USDC',
+      amount: '0.03',
+      recipient: process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f',
+      usdcContract: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
+    },
+    features: [
+      'x402 protocol compliant',
+      'Real payment verification via Coinbase facilitator',
+      'On-chain verification fallback',
+      'Rate limiting (100 req/min)',
+      'Replay attack prevention',
+      'Payment tracking and logging'
+    ],
+    supportedCoins: ['BTC', 'ETH', 'SOL', 'DOGE', 'ADA', 'XRP', 'DOT', 'MATIC', 'LINK', 'UNI'],
+    documentation: 'https://x402.org/docs'
+  });
+});
+
+app.get('/v1/sentiment/:coin', limiter, x402Middleware('0.03'), async (req, res) => {
+  try {
+    const coin = req.params.coin.toUpperCase();
+    console.log(`🔍 Analyzing sentiment for ${coin}...`);
+    
+    const redditData = await fetchRedditData(coin);
+    const analysis = analyzeSentiments(redditData);
+    const compositeScore = analysis.vaderAvg;
+    
+    let signal = 'NEUTRAL';
+    if (compositeScore > 0.15) signal = 'STRONG BUY';
+    else if (compositeScore > 0.05) signal = 'BUY';
+    else if (compositeScore < -0.15) signal = 'STRONG SELL';
+    else if (compositeScore < -0.05) signal = 'SELL';
+    
+    const trend = compositeScore > 0 ? 'up' : 'down';
+    
+    const response = {
+      coin,
+      signal,
+      score: parseFloat(compositeScore.toFixed(3)),
+      positive: analysis.positive,
+      negative: analysis.negative,
+      neutral: analysis.neutral,
+      mentions: analysis.totalMentions,
+      trend,
+      sources: ['reddit'],
+      timestamp: new Date().toISOString(),
+      cost: '0.03 USDC'
+    };
+    
+    console.log(`✅ Sentiment analysis complete for ${coin}: ${signal}`);
+    res.json(response);
+    
+  } catch (error) {
+    console.error('Analysis error:', error);
+    res.status(500).json({ 
+      error: 'Analysis failed', 
+      message: error.message 
+    });
+  }
+});
+
+app.get('/admin/payments', (req, res) => {
+  const apiKey = req.headers['x-admin-key'];
+  
+  if (apiKey !== process.env.ADMIN_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  
+  const totalRevenue = paymentsDB.length * 0.03;
+  
+  res.json({
+    totalPayments: paymentsDB.length,
+    totalRevenue: `$${totalRevenue.toFixed(2)}`,
+    recentPayments: paymentsDB.slice(-50),
+    status: 'operational'
+  });
+});
+
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'healthy', 
+    service: 'crypto-sentiment-api',
+    version: '1.3.0',
+    uptime: Math.floor(process.uptime()),
+    totalPayments: paymentsDB.length,
+    x402: 'enabled',
+    x402compliant: true
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 CryptoSentiment API running on port ${PORT}`);
+  console.log(`💰 x402 payments enabled (v1.3.0)`);
+  console.log(`📊 Payment tracking: ${paymentsDB.length} payments processed`);
+  console.log(`✅ x402 spec compliant`);
+});
+
+module.exports = app;
