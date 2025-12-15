@@ -21,7 +21,6 @@ Get real-time sentiment analysis for cryptocurrencies by paying $0.03 USDC per q
 3. Click and pay $0.03 USDC to get instant sentiment for BTC, ETH, SOL, etc.
 
 ### Option 2: Direct API Call
-
 ```bash
 # Get payment requirements first
 curl https://crypto-sentiment-api-production.up.railway.app/v1/sentiment/BTC
@@ -55,7 +54,6 @@ curl https://crypto-sentiment-api-production.up.railway.app/v1/sentiment/BTC \
 ## What You Get
 
 Each query returns:
-
 ```json
 {
   "coin": "BTC",
@@ -94,10 +92,10 @@ BTC, ETH, SOL, DOGE, ADA, XRP, DOT, MATIC, LINK, UNI
 
 ## For Developers
 
-- [Quick Start Guide](quickstart.md) - Get started in 5 minutes
-- [x402 Protocol Guide](x402-protocol.md) - Understanding x402 payments
-- [Integration Examples](integrations/) - Code for AI agents
-- [API Reference](api-reference.md) - Complete endpoint docs
+- [Quick Start Guide](docs/quickstart.md) - Get started in 5 minutes
+- [x402 Protocol Guide](docs/x402-protocol.md) - Understanding x402 payments
+- [Integration Examples](docs/integrations/) - Code for AI agents
+- [API Reference](docs/api-reference.md) - Complete endpoint docs
 
 ## Use Cases
 
@@ -117,9 +115,9 @@ BTC, ETH, SOL, DOGE, ADA, XRP, DOT, MATIC, LINK, UNI
 
 ## Support
 
-- **GitHub**: [crypto-sentiment-api](https://github.com/lobsterbar2027-boop/crypto-sentiment-api)
+- **Twitter**: [@BreakTheCubicle](https://x.com/BreakTheCubicle)
+- **GitHub**: [Issues](https://github.com/lobsterbar2027-boop/crypto-sentiment-api/issues)
 - **x402scan**: Find us on [x402scan.com](https://x402scan.com)
-- **Issues**: Open an issue on GitHub
 
 ## How It Works
 
@@ -129,5 +127,3 @@ BTC, ETH, SOL, DOGE, ADA, XRP, DOT, MATIC, LINK, UNI
 4. Payment is verified via Coinbase facilitator
 5. API returns sentiment analysis
 6. Payment is logged to prevent replay attacks
-
-[Get Started →](quickstart.md)
