@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>X402 Crypto Sentiment API - Pay-Per-Call with USDC</title>
+    <meta name="description" content="Real-time crypto sentiment analysis API. Pay $0.03 USDC per query. No subscriptions. Perfect for AI agents.">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        
+        header {
+            text-align: center;
+            padding: 80px 20px 60px;
+            color: white;
+        }
+        
+        header h1 {
+            font-size: 3.5rem;
+            margin-bottom: 20px;
+            font-weight: 700;
+        }
+        
+        header .tagline {
+            font-size: 1.5rem;
+            opacity: 0.95;
+            margin-bottom: 15px;
+        }
+        
+        header .subline {
+            font-size: 1.2rem;
+            opacity: 0.85;
+        }
+        
+        .cta-buttons {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 40px;
+        }
+        
+        .btn {
+            padding: 18px 40px;
+            font-size: 1.1rem;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            text-decoration: none;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+            display: inline-block;
+        }
+        
+        .btn-primary {
+            background: white;
+            color: #667eea;
+        }
+        
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 2px solid white;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+        }
+        
+        .demo-section {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 40px;
+            border-radius: 12px;
+            margin: 40px 0;
+            overflow-x: auto;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+        }
+        
+        .demo-section h3 {
+            color: #4fc3f7;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+        }
+        
+        .demo-section pre {
+            margin: 0;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 0.95rem;
+            line-height: 1.6;
+        }
+        
+        .keyword { color: #c678dd; }
+        .string { color: #98c379; }
+        .number { color: #d19a66; }
+        .comment { color: #5c6370; }
+        
+        .features {
+            background: white;
+            padding: 60px 40px;
+            border-radius: 20px;
+            margin: 40px 0;
+        }
+        
+        .features h2 {
+            text-align: center;
+            font-size: 2.5rem;
+            margin-bottom: 50px;
+            color: #333;
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+        }
+        
+        .feature-card {
+            padding: 30px;
+            background: #f8f9fa;
+            border-radius: 12px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .feature-card h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.4rem;
+        }
+        
+        .pricing {
+            background: white;
+            padding: 60px 40px;
+            border-radius: 20px;
+            margin: 40px 0;
+            text-align: center;
+        }
+        
+        .pricing h2 {
+            font-size: 2.5rem;
+            margin-bottom: 30px;
+            color: #333;
+        }
+        
+        .price-tag {
+            font-size: 4rem;
+            font-weight: 700;
+            color: #667eea;
+            margin: 30px 0;
+        }
+        
+        .price-tag span {
+            font-size: 1.5rem;
+        }
+        
+        .supported-coins {
+            background: white;
+            padding: 60px 40px;
+            border-radius: 20px;
+            margin: 40px 0;
+            text-align: center;
+        }
+        
+        .coins-list {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 30px;
+        }
+        
+        .coin-badge {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 30px;
+            border-radius: 25px;
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+        
+        footer {
+            text-align: center;
+            padding: 40px 20px;
+            color: white;
+        }
+        
+        footer a {
+            color: white;
+            text-decoration: none;
+            margin: 0 15px;
+            opacity: 0.9;
+        }
+        
+        footer a:hover {
+            opacity: 1;
+            text-decoration: underline;
+        }
+        
+        @media (max-width: 768px) {
+            header h1 { font-size: 2.5rem; }
+            header .tagline { font-size: 1.2rem; }
+            .price-tag { font-size: 3rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🪙 X402 Crypto Sentiment API</h1>
+            <p class="tagline">Pay-Per-Call Sentiment Analysis</p>
+            <p class="subline">No API keys. No subscriptions. Just pay $0.03 USDC per query.</p>
+            
+            <div class="cta-buttons">
+                <a href="#docs" class="btn btn-primary">View Docs</a>
+                <a href="https://x402scan.com" class="btn btn-secondary">Try on x402scan</a>
+                <a href="https://github.com/lobsterbar2027-boop/crypto-sentiment-api" class="btn btn-secondary">GitHub</a>
+            </div>
+        </header>
+        
+        <div class="demo-section">
+            <h3>💻 Quick Example</h3>
+            <pre><code><span class="comment">// 1. Request sentiment (returns 402 with payment info)</span>
+<span class="keyword">const</span> req1 = <span class="keyword">await</span> fetch(<span class="string">'https://crypto-sentiment-api-production.up.railway.app/v1/sentiment/BTC'</span>);
+
+<span class="comment">// 2. Pay 0.03 USDC on Base network</span>
+<span class="keyword">const</span> tx = <span class="keyword">await</span> usdc.transfer(paymentAddress, <span class="number">30000</span>);
+
+<span class="comment">// 3. Include payment proof in header</span>
+<span class="keyword">const</span> req2 = <span class="keyword">await</span> fetch(url, {
+  headers: { <span class="string">'X-Payment'</span>: paymentProof }
+});
+
+<span class="comment">// 4. Get sentiment data!</span>
+{
+  <span class="string">"coin"</span>: <span class="string">"BTC"</span>,
+  <span class="string">"signal"</span>: <span class="string">"STRONG BUY"</span>,
+  <span class="string">"score"</span>: <span class="number">0.234</span>,
+  <span class="string">"positive"</span>: <span class="number">65</span>,
+  <span class="string">"mentions"</span>: <span class="number">147</span>
+}</code></pre>
+        </div>
+        
+        <div class="features">
+            <h2>Why Developers Love It</h2>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <h3>🪙 True Micropayments</h3>
+                    <p>Pay only $0.03 per query. No monthly fees, no credit cards. Perfect for occasional use or autonomous agents.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🤖 Agent-Friendly</h3>
+                    <p>Built for AI agents. No API key management - agents pay from their own wallets using x402 protocol.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>⚡ Fast & Cheap</h3>
+                    <p>Built on Base network. Low gas fees (~$0.001) and instant confirmations. Response time < 200ms.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>📊 Real Data</h3>
+                    <p>Aggregated from Reddit crypto communities. VADER sentiment analysis with 100+ mentions per coin.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🔒 Secure</h3>
+                    <p>Dual payment verification (Coinbase facilitator + on-chain). Replay attack prevention. Production-ready.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>📖 Great Docs</h3>
+                    <p>Complete integration guides for Virtuals Protocol, LangChain, Python, and Node.js. Copy-paste ready!</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="pricing">
+            <h2>Simple Pricing</h2>
+            <div class="price-tag">$0.03 <span>USDC</span></div>
+            <p style="font-size: 1.3rem; color: #666; margin-bottom: 30px;">Per query + ~$0.001 gas on Base</p>
+            
+            <div style="max-width: 600px; margin: 40px auto; text-align: left; background: #f8f9fa; padding: 30px; border-radius: 12px;">
+                <h3 style="margin-bottom: 20px;">What You Get:</h3>
+                <ul style="list-style: none; font-size: 1.1rem; line-height: 2;">
+                    <li>✅ Real-time sentiment analysis</li>
+                    <li>✅ Signal: STRONG BUY, BUY, NEUTRAL, SELL, STRONG SELL</li>
+                    <li>✅ Sentiment breakdown (positive/negative/neutral %)</li>
+                    <li>✅ Number of mentions analyzed</li>
+                    <li>✅ Trend direction (up/down)</li>
+                    <li>✅ Reddit data from 4 major subreddits</li>
+                    <li>✅ 100 requests per minute rate limit</li>
+                </ul>
+            </div>
+            
+            <a href="https://x402scan.com" class="btn btn-primary" style="font-size: 1.2rem;">Try It Now</a>
+        </div>
+        
+        <div class="supported-coins">
+            <h2>Supported Coins</h2>
+            <div class="coins-list">
+                <span class="coin-badge">BTC</span>
+                <span class="coin-badge">ETH</span>
+                <span class="coin-badge">SOL</span>
+                <span class="coin-badge">DOGE</span>
+                <span class="coin-badge">ADA</span>
+                <span class="coin-badge">XRP</span>
+                <span class="coin-badge">DOT</span>
+                <span class="coin-badge">MATIC</span>
+                <span class="coin-badge">LINK</span>
+                <span class="coin-badge">UNI</span>
+            </div>
+            <p style="margin-top: 30px; font-size: 1.1rem; color: #666;">More coins coming soon!</p>
+        </div>
+        
+        <div class="features" id="docs">
+            <h2>Resources</h2>
+            <div style="max-width: 800px; margin: 0 auto;">
+                <div class="feature-card" style="margin-bottom: 20px;">
+                    <h3>📚 Documentation</h3>
+                    <p>Complete API reference, integration guides, and examples for JavaScript, Python, Virtuals Protocol, and LangChain.</p>
+                    <a href="https://github.com/lobsterbar2027-boop/crypto-sentiment-api" style="color: #667eea; font-weight: 600;">Read the Docs →</a>
+                </div>
+                
+                <div class="feature-card" style="margin-bottom: 20px;">
+                    <h3>🚀 Quick Start</h3>
+                    <p>Get started in 5 minutes with our step-by-step guide. Use x402scan, cURL, JavaScript, or Python.</p>
+                    <a href="https://github.com/lobsterbar2027-boop/crypto-sentiment-api#quick-start" style="color: #667eea; font-weight: 600;">Get Started →</a>
+                </div>
+                
+                <div class="feature-card">
+                    <h3>💬 Support</h3>
+                    <p>Open source on GitHub. Report issues, contribute, or star the repo!</p>
+                    <a href="https://github.com/lobsterbar2027-boop/crypto-sentiment-api/issues" style="color: #667eea; font-weight: 600;">GitHub Issues →</a>
+                </div>
+            </div>
+        </div>
+        
+        <footer>
+            <p style="margin-bottom: 20px; font-size: 1.1rem;">Built with the x402 protocol • Open Source • Production Ready</p>
+            <div>
+                <a href="https://github.com/lobsterbar2027-boop/crypto-sentiment-api">GitHub</a>
+                <a href="https://x402scan.com">x402scan</a>
+                <a href="https://x402.org">x402 Protocol</a>
+                <a href="https://base.org">Base Network</a>
+            </div>
+            <p style="margin-top: 30px; opacity: 0.7;">© 2024 X402 Crypto Sentiment API</p>
+        </footer>
+    </div>
+</body>
+</html>
