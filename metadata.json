@@ -1,0 +1,32 @@
+{
+  "name": "GenVox Sentiment API",
+  "description": "Real-time crypto sentiment analysis powered by Reddit social data. Returns BUY/SELL/NEUTRAL signals with confidence scores for BTC, ETH, SOL, and other major cryptocurrencies. Analyzes r/CryptoCurrency discussions, upvotes, and comment sentiment to provide actionable trading signals. Perfect for AI trading bots and portfolio managers. Pay $0.03 USDC per query via x402 - no subscriptions, no API keys required.",
+  "category": "Trading Signals",
+  "tags": ["sentiment", "trading", "reddit", "crypto", "signals", "AI agents"],
+  "version": "1.0.0",
+  "pricing": "$0.03 USDC per query",
+  "support": {
+    "email": "support@genvox.io",
+    "twitter": "https://x.com/BreakTheCubicle",
+    "documentation": "https://github.com/lobsterbar2027-boop/crypto-sentiment-api"
+  },
+  "features": [
+    "Real-time sentiment analysis",
+    "BUY/SELL/NEUTRAL signals",
+    "Confidence scores (0-1)",
+    "10+ supported coins",
+    "Reddit data source",
+    "Sub-200ms response time",
+    "No rate limits"
+  ],
+  "example_response": {
+    "coin": "BTC",
+    "signal": "STRONG BUY",
+    "score": 0.234,
+    "positive": 65,
+    "negative": 15,
+    "neutral": 20,
+    "mentions": 147,
+    "trend": "up"
+  }
+}
