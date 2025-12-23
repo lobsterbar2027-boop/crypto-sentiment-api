@@ -29,6 +29,11 @@ GenVox analyzes real-time sentiment from Reddit's cryptocurrency communities to 
 ---
 
 ## 🚀 Quick Start
+## 📖 Documentation
+   
+   - **[API Documentation](./API_DOCUMENTATION.md)** - Complete API reference
+   - **[Quickstart Guide](./QUICKSTART.md)** - Get started in 5 minutes
+   - **[Code Examples](./examples/)** - Working JavaScript & Python examples
 
 ### For AI Agents
 
