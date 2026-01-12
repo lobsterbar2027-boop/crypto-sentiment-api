@@ -1,4 +1,5 @@
 {
+  "type": "module",
   "name": "crypto-sentiment-api",
   "version": "2.0.0",
   "description": "AI-powered cryptocurrency sentiment analysis API with x402 micropayments on Base Mainnet",
@@ -20,15 +21,5 @@
   },
   "engines": {
     "node": ">=18.0.0"
-  },
-  "keywords": [
-    "x402",
-    "cryptocurrency",
-    "sentiment-analysis",
-    "micropayments",
-    "base",
-    "usdc"
-  ],
-  "author": "",
-  "license": "MIT"
+  }
 }
