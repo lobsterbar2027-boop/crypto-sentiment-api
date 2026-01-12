@@ -2,9 +2,13 @@ const express = require('express');
 const cors = require('cors');
 const Sentiment = require('sentiment');
 const vader = require('vader-sentiment');
-const { ethers } = require('ethers');
 const rateLimit = require('express-rate-limit');
 const fs = require('fs');
+
+// ✅ IMPORT OFFICIAL x402 SDK
+const { paymentMiddleware, x402ResourceServer } = require('@x402/express');
+const { ExactEvmScheme } = require('@x402/evm/exact/server');
+const { HTTPFacilitatorClient } = require('@x402/core/server');
 
 const app = express();
 const sentiment = new Sentiment();
@@ -12,6 +16,7 @@ const sentiment = new Sentiment();
 app.use(cors());
 app.use(express.json());
 
+// ✅ KEEP YOUR PAYMENT TRACKING
 const paymentsDB = [];
 
 const limiter = rateLimit({
@@ -20,88 +25,56 @@ const limiter = rateLimit({
   message: { error: 'Too many requests, please slow down' }
 });
 
-const x402Middleware = (price) => {
-  return async (req, res, next) => {
-    const paymentHeader = req.headers['x-payment'];
-    
-    if (!paymentHeader) {
-      return res.status(402).json({
-        x402Version: 1,
-        error: 'X-PAYMENT header is required',
-        accepts: [{
-          scheme: 'exact',
-          network: 'base',
-          maxAmountRequired: (parseFloat(price) * 1000000).toString(),
-          asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-          payTo: process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f',
-          resource: `https://crypto-sentiment-api-production.up.railway.app${req.path}`,
-          description: `Real-time crypto sentiment analysis for ${req.params.coin || 'cryptocurrency'}`,
-          mimeType: 'application/json',
-          maxTimeoutSeconds: 60,
-          outputSchema: {
-            input: {
-              type: "http",
-              method: "GET"
-            },
-            output: {
-              coin: { type: "string" },
-              signal: { type: "string" },
-              score: { type: "number" },
-              positive: { type: "number" },
-              negative: { type: "number" },
-              neutral: { type: "number" },
-              mentions: { type: "number" },
-              trend: { type: "string" },
-              sources: { type: "array" },
-              timestamp: { type: "string" },
-              cost: { type: "string" }
-            }
-          },
-          extra: {
-            name: 'USD Coin',
-            version: '2'
-          }
-        }]
-      });
-    }
-    
-    try {
-      const paymentData = JSON.parse(Buffer.from(paymentHeader, 'base64').toString());
-      
-      console.log('Payment received:', {
-        txHash: paymentData.transactionHash?.slice(0, 10) + '...',
-        timestamp: new Date().toISOString()
-      });
-      
-      const isValid = await verifyPaymentWithFacilitator(paymentData, price);
-      
-      if (!isValid) {
-        return res.status(403).json({ 
-          error: 'Payment verification failed',
-          message: 'Could not verify payment with facilitator'
-        });
-      }
-      
-      const paymentId = paymentData.transactionHash || paymentData.signature?.slice(0, 20);
-      const alreadyUsed = paymentsDB.find(p => p.id === paymentId);
-      
-      if (alreadyUsed) {
-        return res.status(403).json({ 
-          error: 'Payment already used',
-          message: 'This payment has already been redeemed'
-        });
-      }
-      
+// ============================================================================
+// ✅ CONFIGURE x402 SDK
+// ============================================================================
+
+const payTo = process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f';
+
+const facilitatorClient = new HTTPFacilitatorClient({
+  url: 'https://api.cdp.coinbase.com/platform/v2/x402'
+});
+
+const server = new x402ResourceServer(facilitatorClient)
+  .register('eip155:8453', new ExactEvmScheme());
+
+const paymentConfig = {
+  'GET /v1/sentiment/:coin': {
+    accepts: [
+      {
+        scheme: 'exact',
+        price: '$0.03',
+        network: 'eip155:8453',
+        payTo,
+      },
+    ],
+    description: 'Real-time crypto sentiment analysis - Social media & Reddit sentiment for BTC, ETH, SOL and other cryptocurrencies',
+    mimeType: 'application/json',
+  },
+};
+
+// Custom middleware to track payments after x402 verification
+const trackPayment = (req, res, next) => {
+  // Store original json method
+  const originalJson = res.json.bind(res);
+  
+  // Override json to capture successful responses
+  res.json = function(data) {
+    // Only track if this is a successful sentiment response
+    if (data.coin && data.signal && res.statusCode === 200) {
       const paymentRecord = {
-        id: paymentId,
+        id: req.headers['x-payment'] ? 
+          Buffer.from(req.headers['x-payment'], 'base64').toString().slice(0, 20) : 
+          Date.now().toString(),
         timestamp: new Date().toISOString(),
-        amount: price,
-        coin: req.params.coin || 'unknown',
-        from: paymentData.from || 'unknown'
+        amount: '0.03',
+        coin: data.coin,
+        from: 'verified'
       };
       
       paymentsDB.push(paymentRecord);
       
+      // Log to file
       const logLine = `${paymentRecord.timestamp},${paymentRecord.amount},${paymentRecord.coin},${paymentRecord.from}\n`;
       try {
         fs.appendFileSync('payments.log', logLine);
@@ -109,101 +82,22 @@ const x402Middleware = (price) => {
         console.error('Failed to write payment log:', e);
       }
       
-      console.log('✅ PAYMENT VERIFIED:', paymentRecord);
-      next();
-      
-    } catch (error) {
-      console.error('❌ Payment verification error:', error.message);
-      return res.status(400).json({ 
-        error: 'Payment verification failed',
-        message: error.message
-      });
+      console.log('✅ PAYMENT TRACKED:', paymentRecord);
     }
+    
+    return originalJson(data);
   };
+  
+  next();
 };
 
-async function verifyPaymentWithFacilitator(paymentData, expectedAmount) {
-  try {
-    const fetch = (await import('node-fetch')).default;
-    const facilitatorUrl = 'https://facilitator.coinbase.com/verify';
-    
-    const verifyResponse = await fetch(facilitatorUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        payment: paymentData,
-        expectedAmount: expectedAmount,
-        expectedRecipient: process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f',
-        network: 'base',
-        currency: 'USDC'
-      })
-    });
-    
-    if (!verifyResponse.ok) {
-      console.error('Facilitator verification failed:', verifyResponse.status);
-      return false;
-    }
-    
-    const verifyResult = await verifyResponse.json();
-    
-    if (verifyResult.verified === true && verifyResult.status === 'confirmed') {
-      console.log('✅ Payment verified by facilitator');
-      return true;
-    }
-    
-    console.error('❌ Facilitator rejected payment:', verifyResult);
-    return false;
-    
-  } catch (error) {
-    console.error('❌ Facilitator verification error:', error.message);
-    return await verifyPaymentOnChain(paymentData, expectedAmount);
-  }
-}
+// ✅ APPLY x402 PAYMENT MIDDLEWARE + YOUR TRACKING
+app.use(paymentMiddleware(paymentConfig, server));
+app.use('/v1/sentiment/:coin', trackPayment);
 
-async function verifyPaymentOnChain(paymentData, expectedAmount) {
-  try {
-    const provider = new ethers.JsonRpcProvider(
-      process.env.BASE_RPC_URL || 'https://mainnet.base.org'
-    );
-    
-    const txHash = paymentData.transactionHash;
-    
-    if (!txHash) {
-      console.error('No transaction hash provided');
-      return false;
-    }
-    
-    const tx = await provider.getTransaction(txHash);
-    
-    if (!tx) {
-      console.error('Transaction not found on Base');
-      return false;
-    }
-    
-    const receipt = await provider.getTransactionReceipt(txHash);
-    
-    if (!receipt || receipt.status !== 1) {
-      console.error('Transaction not confirmed or failed');
-      return false;
-    }
-    
-    const expectedRecipient = (process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f').toLowerCase();
-    
-    if (tx.to?.toLowerCase() !== expectedRecipient.toLowerCase()) {
-      console.error('Transaction recipient mismatch');
-      return false;
-    }
-    
-    console.log('✅ On-chain verification passed (fallback method)');
-    return true;
-    
-  } catch (error) {
-    console.error('❌ On-chain verification error:', error.message);
-    return false;
-  }
-}
+// ============================================================================
+// YOUR ORIGINAL SENTIMENT ANALYSIS FUNCTIONS - UNCHANGED
+// ============================================================================
 
 async function fetchRedditData(coin) {
   try {
@@ -285,16 +179,20 @@ function analyzeSentiments(texts) {
   };
 }
 
+// ============================================================================
+// API ROUTES
+// ============================================================================
+
 app.get('/', (req, res) => {
   return res.status(402).json({
     x402Version: 1,
     error: 'X-PAYMENT header is required',
     accepts: [{
       scheme: 'exact',
-      network: 'base',
+      network: 'eip155:8453',
       maxAmountRequired: '30000',
       asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-      payTo: process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f',
+      payTo: payTo,
       resource: 'https://crypto-sentiment-api-production.up.railway.app/v1/sentiment/BTC',
       description: 'Real-time crypto sentiment analysis - Social media & Reddit sentiment for BTC, ETH, SOL and other cryptocurrencies',
       mimeType: 'application/json',
@@ -329,7 +227,7 @@ app.get('/', (req, res) => {
 app.get('/info', (req, res) => {
   res.json({
     name: 'CryptoSentiment API',
-    version: '1.4.0',
+    version: '2.0.0',
     status: 'Production Ready',
     pricing: '$0.03 USDC per query via x402',
     endpoints: {
@@ -340,36 +238,42 @@ app.get('/info', (req, res) => {
       admin: 'GET /admin/payments - Payment history (requires X-Admin-Key)'
     },
     x402: {
-      facilitator: 'https://facilitator.coinbase.com',
-      network: 'base',
+      sdk: 'official',
+      facilitator: 'https://api.cdp.coinbase.com/platform/v2/x402',
+      network: 'eip155:8453',
+      networkName: 'Base Mainnet',
       currency: 'USDC',
       amount: '0.03',
-      recipient: process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f',
+      recipient: payTo,
       usdcContract: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
     },
     features: [
-      'x402 protocol compliant',
+      'x402 protocol v2 compliant',
+      'Official x402 SDK integration',
       'x402scan compatible with outputSchema',
-      'Real payment verification via Coinbase facilitator',
-      'On-chain verification fallback',
+      'Automatic payment verification',
       'Rate limiting (100 req/min)',
       'Replay attack prevention',
       'Payment tracking and logging'
     ],
     supportedCoins: ['BTC', 'ETH', 'SOL', 'DOGE', 'ADA', 'XRP', 'DOT', 'MATIC', 'LINK', 'UNI'],
-    documentation: 'https://x402.org/docs'
+    documentation: 'https://docs.cdp.coinbase.com/x402'
   });
 });
 
-app.get('/v1/sentiment/:coin', limiter, x402Middleware('0.03'), async (req, res) => {
+// ✅ YOUR ORIGINAL SENTIMENT ENDPOINT - LOGIC UNCHANGED
+app.get('/v1/sentiment/:coin', limiter, async (req, res) => {
   try {
     const coin = req.params.coin.toUpperCase();
     console.log(`🔍 Analyzing sentiment for ${coin}...`);
+    console.log('✅ Payment verified by x402 SDK');
     
+    // YOUR ORIGINAL SENTIMENT ANALYSIS - UNCHANGED
     const redditData = await fetchRedditData(coin);
     const analysis = analyzeSentiments(redditData);
     const compositeScore = analysis.vaderAvg;
     
+    // YOUR ORIGINAL SIGNAL LOGIC - UNCHANGED
     let signal = 'NEUTRAL';
     if (compositeScore > 0.15) signal = 'STRONG BUY';
     else if (compositeScore > 0.05) signal = 'BUY';
@@ -378,6 +282,7 @@ app.get('/v1/sentiment/:coin', limiter, x402Middleware('0.03'), async (req, res)
     
     const trend = compositeScore > 0 ? 'up' : 'down';
     
+    // YOUR ORIGINAL RESPONSE FORMAT - UNCHANGED
     const response = {
       coin,
       signal,
@@ -404,6 +309,7 @@ app.get('/v1/sentiment/:coin', limiter, x402Middleware('0.03'), async (req, res)
   }
 });
 
+// ✅ YOUR ORIGINAL ADMIN ENDPOINT - KEPT
 app.get('/admin/payments', (req, res) => {
   const apiKey = req.headers['x-admin-key'];
   
@@ -425,19 +331,23 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy', 
     service: 'crypto-sentiment-api',
-    version: '1.4.0',
+    version: '2.0.0',
     uptime: Math.floor(process.uptime()),
     totalPayments: paymentsDB.length,
-    x402: 'enabled',
-    x402compliant: true,
-    x402scanCompliant: true
+    x402: {
+      enabled: true,
+      compliant: true,
+      sdk: 'official',
+      version: 2,
+      network: 'eip155:8453'
+    }
   });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 CryptoSentiment API running on port ${PORT}`);
-  console.log(`💰 x402 payments enabled (v1.4.0)`);
+  console.log(`💰 x402 payments enabled (Official SDK v2.0)`);
   console.log(`📊 Payment tracking: ${paymentsDB.length} payments processed`);
   console.log(`✅ x402scan compliant with outputSchema`);
 });
