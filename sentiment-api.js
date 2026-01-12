@@ -4,12 +4,12 @@ const Sentiment = require('sentiment');
 const vader = require('vader-sentiment');
 const rateLimit = require('express-rate-limit');
 const fs = require('fs');
+const crypto = require('crypto');
 
-// ✅ USE OFFICIAL COINBASE x402 PACKAGE (auto-handles CDP auth)
-const { paymentMiddleware } = require('@x402/express');
-const { facilitator } = require('@coinbase/x402');  // ← This handles CDP auth automatically!
+// ✅ IMPORT OFFICIAL x402 SDK (without @coinbase/x402)
+const { paymentMiddleware, x402ResourceServer } = require('@x402/express');
 const { ExactEvmScheme } = require('@x402/evm/exact/server');
-const { x402ResourceServer } = require('@x402/core/server');
+const { HTTPFacilitatorClient } = require('@x402/core/server');
 
 const app = express();
 const sentiment = new Sentiment();
@@ -27,13 +27,85 @@ const limiter = rateLimit({
 });
 
 // ============================================================================
-// ✅ CONFIGURE x402 WITH COINBASE FACILITATOR (MAINNET)
+// ✅ CDP AUTHENTICATION - Manual JWT for Ed25519 Keys
+// ============================================================================
+
+function generateCDPJWT() {
+  const apiKeyId = process.env.CDP_API_KEY_ID;
+  const apiSecret = process.env.CDP_API_KEY_SECRET;
+  
+  if (!apiKeyId || !apiSecret) {
+    console.error('⚠️  CDP credentials not set!');
+    return null;
+  }
+
+  try {
+    // JWT Header
+    const header = {
+      alg: 'EdDSA',  // Ed25519 algorithm
+      typ: 'JWT',
+      kid: apiKeyId
+    };
+
+    // JWT Payload
+    const payload = {
+      sub: apiKeyId,
+      iss: 'cdp',
+      nbf: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 120, // Valid for 2 minutes
+      uri: 'GET api.cdp.coinbase.com/platform/v2/x402'
+    };
+
+    // Encode header and payload
+    const base64Header = Buffer.from(JSON.stringify(header)).toString('base64url');
+    const base64Payload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const message = `${base64Header}.${base64Payload}`;
+
+    // Decode the Ed25519 private key from base64
+    const privateKeyBuffer = Buffer.from(apiSecret, 'base64');
+    
+    // Sign with Ed25519
+    const signature = crypto.sign(null, Buffer.from(message), {
+      key: privateKeyBuffer,
+      format: 'der',
+      type: 'pkcs8'
+    });
+
+    const base64Signature = signature.toString('base64url');
+    const jwt = `${message}.${base64Signature}`;
+
+    return jwt;
+  } catch (error) {
+    console.error('❌ JWT generation failed:', error.message);
+    return null;
+  }
+}
+
+// Create auth headers function for facilitator
+function createAuthHeaders() {
+  const jwt = generateCDPJWT();
+  if (!jwt) {
+    return {};
+  }
+  return {
+    'Authorization': `Bearer ${jwt}`
+  };
+}
+
+// ============================================================================
+// ✅ CONFIGURE x402 SDK - MAINNET WITH CDP AUTHENTICATION
 // ============================================================================
 
 const payTo = process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f';
 
-// ✅ Use Coinbase's facilitator - it reads CDP_API_KEY_ID and CDP_API_KEY_SECRET automatically!
-const server = new x402ResourceServer(facilitator);
+// ✅ CDP Facilitator with Manual JWT Authentication
+const facilitatorClient = new HTTPFacilitatorClient({
+  url: 'https://api.cdp.coinbase.com/platform/v2/x402',
+  createAuthHeaders: createAuthHeaders  // Pass our auth function
+});
+
+// ✅ MAINNET: Base
+const server = new x402ResourceServer(facilitatorClient);
 server.register('eip155:8453', new ExactEvmScheme());  // Base mainnet
 
 const paymentConfig = {
@@ -234,7 +306,8 @@ app.get('/info', (req, res) => {
     },
     x402: {
       sdk: 'official',
-      facilitator: '@coinbase/x402 (CDP facilitator)',
+      facilitator: 'https://api.cdp.coinbase.com/platform/v2/x402',
+      authentication: 'Manual JWT with Ed25519',
       network: 'eip155:8453',
       networkName: 'Base Mainnet',
       currency: 'USDC',
@@ -244,8 +317,8 @@ app.get('/info', (req, res) => {
     },
     features: [
       'x402 protocol v2 compliant',
-      'Official Coinbase x402 SDK',
-      'CDP facilitator with authentication',
+      'Official x402 SDK integration',
+      'CDP facilitator with Ed25519 JWT auth',
       'x402scan compatible',
       'Real USDC payments on Base mainnet',
       'Rate limiting (100 req/min)',
@@ -334,10 +407,11 @@ app.get('/health', (req, res) => {
       compliant: true,
       sdk: 'official',
       version: 2,
-      facilitator: '@coinbase/x402',
+      facilitator: 'https://api.cdp.coinbase.com/platform/v2/x402',
       network: 'eip155:8453',
       networkName: 'Base Mainnet',
-      cdpAuthenticated: cdpConfigured
+      cdpAuthenticated: cdpConfigured,
+      authMethod: 'Ed25519 JWT'
     }
   });
 });
@@ -351,23 +425,22 @@ app.listen(PORT, () => {
   console.log(`${'='.repeat(70)}`);
   console.log(`📡 Server: http://localhost:${PORT}`);
   console.log(`🌐 Environment: MAINNET (Base)`);
-  console.log(`💰 x402 SDK: Official Coinbase facilitator`);
-  console.log(`🔗 Facilitator: @coinbase/x402 package`);
+  console.log(`💰 x402 SDK: Official v2.0 with Manual Ed25519 JWT`);
+  console.log(`🔗 Facilitator: https://api.cdp.coinbase.com/platform/v2/x402`);
   console.log(`💵 Accepting REAL USDC payments!`);
   console.log(`📊 Payments: ${paymentsDB.length} processed`);
   console.log(`\n⚙️  Configuration:`);
   console.log(`   Network: eip155:8453 (Base Mainnet)`);
   console.log(`   Wallet: ${payTo}`);
   console.log(`   Price: $0.03 USDC per query`);
-  console.log(`   CDP Authenticated: ${cdpConfigured ? '✅ YES' : '❌ NO - Set CDP_API_KEY_ID and CDP_API_KEY_SECRET'}`);
+  console.log(`   CDP Authenticated: ${cdpConfigured ? '✅ YES' : '❌ NO'}`);
   
   if (!cdpConfigured) {
-    console.log(`\n⚠️  WARNING: CDP API credentials not set!`);
-    console.log(`   Create SECRET API KEYS at: cdp.coinbase.com`);
-    console.log(`   Then set: CDP_API_KEY_ID and CDP_API_KEY_SECRET`);
+    console.log(`\n⚠️  WARNING: CDP credentials not configured!`);
+    console.log(`   Set CDP_API_KEY_ID and CDP_API_KEY_SECRET`);
   } else {
     console.log(`\n✅ READY FOR MAINNET PAYMENTS!`);
-    console.log(`   CDP authentication configured`);
+    console.log(`   Ed25519 JWT authentication configured`);
     console.log(`   Real USDC payments enabled`);
   }
   
