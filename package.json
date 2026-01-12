@@ -7,7 +7,7 @@
     "start": "node sentiment-api.js"
   },
   "dependencies": {
-    "@coinbase/x402": "^0.1.0",
+    "@coinbase/x402": "^2.1.0",
     "@x402/core": "^2.0.0",
     "@x402/evm": "^2.0.0",
     "@x402/express": "^2.0.0",
