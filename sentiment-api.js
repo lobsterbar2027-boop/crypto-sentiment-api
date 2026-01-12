@@ -5,10 +5,11 @@ const vader = require('vader-sentiment');
 const rateLimit = require('express-rate-limit');
 const fs = require('fs');
 
-// ✅ IMPORT OFFICIAL x402 SDK
-const { paymentMiddleware, x402ResourceServer } = require('@x402/express');
+// ✅ USE OFFICIAL COINBASE x402 PACKAGE (auto-handles CDP auth)
+const { paymentMiddleware } = require('@x402/express');
+const { facilitator } = require('@coinbase/x402');  // ← This handles CDP auth automatically!
 const { ExactEvmScheme } = require('@x402/evm/exact/server');
-const { HTTPFacilitatorClient } = require('@x402/core/server');
+const { x402ResourceServer } = require('@x402/core/server');
 
 const app = express();
 const sentiment = new Sentiment();
@@ -26,22 +27,14 @@ const limiter = rateLimit({
 });
 
 // ============================================================================
-// ✅ CONFIGURE x402 SDK - MAINNET WITH CDP AUTHENTICATION
+// ✅ CONFIGURE x402 WITH COINBASE FACILITATOR (MAINNET)
 // ============================================================================
 
 const payTo = process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f';
 
-// ✅ CDP Facilitator with Authentication
-const facilitatorClient = new HTTPFacilitatorClient({
-  url: 'https://api.cdp.coinbase.com/platform/v2/x402',
-  // CDP Authentication
-  apiKeyName: process.env.CDP_API_KEY_NAME,
-  privateKey: process.env.CDP_API_KEY_PRIVATE_KEY
-});
-
-// ✅ MAINNET: Base
-const server = new x402ResourceServer(facilitatorClient)
-  .register('eip155:8453', new ExactEvmScheme());  // Base mainnet
+// ✅ Use Coinbase's facilitator - it reads CDP_API_KEY_ID and CDP_API_KEY_SECRET automatically!
+const server = new x402ResourceServer(facilitator);
+server.register('eip155:8453', new ExactEvmScheme());  // Base mainnet
 
 const paymentConfig = {
   'GET /v1/sentiment/:coin': {
@@ -241,7 +234,7 @@ app.get('/info', (req, res) => {
     },
     x402: {
       sdk: 'official',
-      facilitator: 'https://api.cdp.coinbase.com/platform/v2/x402',
+      facilitator: '@coinbase/x402 (CDP facilitator)',
       network: 'eip155:8453',
       networkName: 'Base Mainnet',
       currency: 'USDC',
@@ -251,7 +244,7 @@ app.get('/info', (req, res) => {
     },
     features: [
       'x402 protocol v2 compliant',
-      'Official x402 SDK integration',
+      'Official Coinbase x402 SDK',
       'CDP facilitator with authentication',
       'x402scan compatible',
       'Real USDC payments on Base mainnet',
@@ -327,7 +320,7 @@ app.get('/admin/payments', (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  const cdpConfigured = !!(process.env.CDP_API_KEY_NAME && process.env.CDP_API_KEY_PRIVATE_KEY);
+  const cdpConfigured = !!(process.env.CDP_API_KEY_ID && process.env.CDP_API_KEY_SECRET);
   
   res.json({ 
     status: 'healthy', 
@@ -341,7 +334,7 @@ app.get('/health', (req, res) => {
       compliant: true,
       sdk: 'official',
       version: 2,
-      facilitator: 'https://api.cdp.coinbase.com/platform/v2/x402',
+      facilitator: '@coinbase/x402',
       network: 'eip155:8453',
       networkName: 'Base Mainnet',
       cdpAuthenticated: cdpConfigured
@@ -351,26 +344,27 @@ app.get('/health', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  const cdpConfigured = !!(process.env.CDP_API_KEY_NAME && process.env.CDP_API_KEY_PRIVATE_KEY);
+  const cdpConfigured = !!(process.env.CDP_API_KEY_ID && process.env.CDP_API_KEY_SECRET);
   
   console.log(`\n${'='.repeat(70)}`);
   console.log(`🚀 CryptoSentiment API - MAINNET PRODUCTION`);
   console.log(`${'='.repeat(70)}`);
   console.log(`📡 Server: http://localhost:${PORT}`);
   console.log(`🌐 Environment: MAINNET (Base)`);
-  console.log(`💰 x402 SDK: Official v2.0 with CDP`);
-  console.log(`🔗 Facilitator: https://api.cdp.coinbase.com/platform/v2/x402`);
+  console.log(`💰 x402 SDK: Official Coinbase facilitator`);
+  console.log(`🔗 Facilitator: @coinbase/x402 package`);
   console.log(`💵 Accepting REAL USDC payments!`);
   console.log(`📊 Payments: ${paymentsDB.length} processed`);
   console.log(`\n⚙️  Configuration:`);
   console.log(`   Network: eip155:8453 (Base Mainnet)`);
   console.log(`   Wallet: ${payTo}`);
   console.log(`   Price: $0.03 USDC per query`);
-  console.log(`   CDP Authenticated: ${cdpConfigured ? '✅ YES' : '❌ NO'}`);
+  console.log(`   CDP Authenticated: ${cdpConfigured ? '✅ YES' : '❌ NO - Set CDP_API_KEY_ID and CDP_API_KEY_SECRET'}`);
   
   if (!cdpConfigured) {
-    console.log(`\n⚠️  WARNING: CDP credentials not configured!`);
-    console.log(`   Set CDP_API_KEY_NAME and CDP_API_KEY_PRIVATE_KEY`);
+    console.log(`\n⚠️  WARNING: CDP API credentials not set!`);
+    console.log(`   Create SECRET API KEYS at: cdp.coinbase.com`);
+    console.log(`   Then set: CDP_API_KEY_ID and CDP_API_KEY_SECRET`);
   } else {
     console.log(`\n✅ READY FOR MAINNET PAYMENTS!`);
     console.log(`   CDP authentication configured`);
