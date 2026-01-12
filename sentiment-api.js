@@ -6,7 +6,7 @@ const rateLimit = require('express-rate-limit');
 const fs = require('fs');
 const crypto = require('crypto');
 
-// ✅ IMPORT OFFICIAL x402 SDK (without @coinbase/x402)
+// ✅ IMPORT OFFICIAL x402 SDK
 const { paymentMiddleware, x402ResourceServer } = require('@x402/express');
 const { ExactEvmScheme } = require('@x402/evm/exact/server');
 const { HTTPFacilitatorClient } = require('@x402/core/server');
@@ -27,8 +27,29 @@ const limiter = rateLimit({
 });
 
 // ============================================================================
-// ✅ CDP AUTHENTICATION - Manual JWT for Ed25519 Keys
+// ✅ CDP AUTHENTICATION - Convert Raw Ed25519 to PKCS8, then generate JWT
 // ============================================================================
+
+function convertRawEd25519ToPKCS8(rawBase64Key) {
+  try {
+    // Decode the base64 key (64 bytes: 32 private + 32 public)
+    const rawKey = Buffer.from(rawBase64Key, 'base64');
+    
+    // Extract first 32 bytes (the private key)
+    const privateKeyBytes = rawKey.subarray(0, 32);
+    
+    // PKCS8 prefix for Ed25519 private keys
+    const pkcs8Prefix = Buffer.from('302e020100300506032b657004220420', 'hex');
+    
+    // Concatenate prefix + private key bytes
+    const pkcs8Der = Buffer.concat([pkcs8Prefix, privateKeyBytes]);
+    
+    return pkcs8Der;
+  } catch (error) {
+    console.error('❌ Key conversion failed:', error.message);
+    return null;
+  }
+}
 
 function generateCDPJWT() {
   const apiKeyId = process.env.CDP_API_KEY_ID;
@@ -40,41 +61,48 @@ function generateCDPJWT() {
   }
 
   try {
+    // Convert raw Ed25519 key to PKCS8 DER format
+    const pkcs8Key = convertRawEd25519ToPKCS8(apiSecret);
+    if (!pkcs8Key) {
+      return null;
+    }
+
+    // Create KeyObject from PKCS8 DER
+    const privateKey = crypto.createPrivateKey({
+      key: pkcs8Key,
+      format: 'der',
+      type: 'pkcs8'
+    });
+
     // JWT Header
     const header = {
-      alg: 'EdDSA',  // Ed25519 algorithm
+      alg: 'EdDSA',
       typ: 'JWT',
       kid: apiKeyId
     };
 
     // JWT Payload
+    const now = Math.floor(Date.now() / 1000);
     const payload = {
       sub: apiKeyId,
       iss: 'cdp',
-      nbf: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + 120, // Valid for 2 minutes
+      nbf: now,
+      exp: now + 120, // Valid for 2 minutes
       uri: 'GET api.cdp.coinbase.com/platform/v2/x402'
     };
 
-    // Encode header and payload
+    // Base64url encode header and payload
     const base64Header = Buffer.from(JSON.stringify(header)).toString('base64url');
     const base64Payload = Buffer.from(JSON.stringify(payload)).toString('base64url');
     const message = `${base64Header}.${base64Payload}`;
 
-    // Decode the Ed25519 private key from base64
-    const privateKeyBuffer = Buffer.from(apiSecret, 'base64');
-    
-    // Sign with Ed25519
-    const signature = crypto.sign(null, Buffer.from(message), {
-      key: privateKeyBuffer,
-      format: 'der',
-      type: 'pkcs8'
-    });
-
+    // Sign the message with Ed25519
+    const signature = crypto.sign(null, Buffer.from(message), privateKey);
     const base64Signature = signature.toString('base64url');
-    const jwt = `${message}.${base64Signature}`;
 
+    const jwt = `${message}.${base64Signature}`;
     return jwt;
+
   } catch (error) {
     console.error('❌ JWT generation failed:', error.message);
     return null;
@@ -85,6 +113,7 @@ function generateCDPJWT() {
 function createAuthHeaders() {
   const jwt = generateCDPJWT();
   if (!jwt) {
+    console.error('⚠️  Failed to generate JWT - check your CDP credentials');
     return {};
   }
   return {
@@ -98,10 +127,10 @@ function createAuthHeaders() {
 
 const payTo = process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f';
 
-// ✅ CDP Facilitator with Manual JWT Authentication
+// ✅ CDP Facilitator with Ed25519 JWT Authentication
 const facilitatorClient = new HTTPFacilitatorClient({
   url: 'https://api.cdp.coinbase.com/platform/v2/x402',
-  createAuthHeaders: createAuthHeaders  // Pass our auth function
+  createAuthHeaders: createAuthHeaders
 });
 
 // ✅ MAINNET: Base
@@ -255,9 +284,9 @@ app.get('/', (req, res) => {
     error: 'X-PAYMENT header is required',
     accepts: [{
       scheme: 'exact',
-      network: 'eip155:8453',  // Mainnet
+      network: 'eip155:8453',
       maxAmountRequired: '30000',
-      asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',  // USDC on Base mainnet
+      asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
       payTo: payTo,
       resource: 'https://crypto-sentiment-api-production.up.railway.app/v1/sentiment/BTC',
       description: 'Real-time crypto sentiment analysis - Social media & Reddit sentiment for BTC, ETH, SOL and other cryptocurrencies',
@@ -307,7 +336,7 @@ app.get('/info', (req, res) => {
     x402: {
       sdk: 'official',
       facilitator: 'https://api.cdp.coinbase.com/platform/v2/x402',
-      authentication: 'Manual JWT with Ed25519',
+      authentication: 'Ed25519 JWT (PKCS8)',
       network: 'eip155:8453',
       networkName: 'Base Mainnet',
       currency: 'USDC',
@@ -411,7 +440,7 @@ app.get('/health', (req, res) => {
       network: 'eip155:8453',
       networkName: 'Base Mainnet',
       cdpAuthenticated: cdpConfigured,
-      authMethod: 'Ed25519 JWT'
+      authMethod: 'Ed25519 JWT with PKCS8 conversion'
     }
   });
 });
@@ -425,7 +454,7 @@ app.listen(PORT, () => {
   console.log(`${'='.repeat(70)}`);
   console.log(`📡 Server: http://localhost:${PORT}`);
   console.log(`🌐 Environment: MAINNET (Base)`);
-  console.log(`💰 x402 SDK: Official v2.0 with Manual Ed25519 JWT`);
+  console.log(`💰 x402 SDK: Official v2.0 with Ed25519 JWT`);
   console.log(`🔗 Facilitator: https://api.cdp.coinbase.com/platform/v2/x402`);
   console.log(`💵 Accepting REAL USDC payments!`);
   console.log(`📊 Payments: ${paymentsDB.length} processed`);
@@ -440,7 +469,8 @@ app.listen(PORT, () => {
     console.log(`   Set CDP_API_KEY_ID and CDP_API_KEY_SECRET`);
   } else {
     console.log(`\n✅ READY FOR MAINNET PAYMENTS!`);
-    console.log(`   Ed25519 JWT authentication configured`);
+    console.log(`   Ed25519 key converted to PKCS8`);
+    console.log(`   JWT authentication configured`);
     console.log(`   Real USDC payments enabled`);
   }
   
