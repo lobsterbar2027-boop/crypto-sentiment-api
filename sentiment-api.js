@@ -26,19 +26,22 @@ const limiter = rateLimit({
 });
 
 // ============================================================================
-// ✅ CONFIGURE x402 SDK - TESTNET (NO AUTH REQUIRED)
+// ✅ CONFIGURE x402 SDK - MAINNET WITH CDP AUTHENTICATION
 // ============================================================================
 
 const payTo = process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f';
 
-// ✅ USE TESTNET FACILITATOR - No authentication required!
+// ✅ CDP Facilitator with Authentication
 const facilitatorClient = new HTTPFacilitatorClient({
-  url: 'https://x402.org/facilitator'  // Free testnet facilitator
+  url: 'https://api.cdp.coinbase.com/platform/v2/x402',
+  // CDP Authentication
+  apiKeyName: process.env.CDP_API_KEY_NAME,
+  privateKey: process.env.CDP_API_KEY_PRIVATE_KEY
 });
 
-// ✅ TESTNET: Base Sepolia
+// ✅ MAINNET: Base
 const server = new x402ResourceServer(facilitatorClient)
-  .register('eip155:84532', new ExactEvmScheme());  // Base Sepolia testnet
+  .register('eip155:8453', new ExactEvmScheme());  // Base mainnet
 
 const paymentConfig = {
   'GET /v1/sentiment/:coin': {
@@ -46,7 +49,7 @@ const paymentConfig = {
       {
         scheme: 'exact',
         price: '$0.03',
-        network: 'eip155:84532',  // Base Sepolia testnet
+        network: 'eip155:8453',  // Base mainnet
         payTo,
       },
     ],
@@ -187,9 +190,9 @@ app.get('/', (req, res) => {
     error: 'X-PAYMENT header is required',
     accepts: [{
       scheme: 'exact',
-      network: 'eip155:84532',  // Testnet
+      network: 'eip155:8453',  // Mainnet
       maxAmountRequired: '30000',
-      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',  // USDC on Base Sepolia
+      asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',  // USDC on Base mainnet
       payTo: payTo,
       resource: 'https://crypto-sentiment-api-production.up.railway.app/v1/sentiment/BTC',
       description: 'Real-time crypto sentiment analysis - Social media & Reddit sentiment for BTC, ETH, SOL and other cryptocurrencies',
@@ -225,11 +228,10 @@ app.get('/', (req, res) => {
 app.get('/info', (req, res) => {
   res.json({
     name: 'CryptoSentiment API',
-    version: '2.0.0-testnet',
-    status: 'Testing on Base Sepolia',
+    version: '2.0.0-mainnet',
+    status: 'Production - Accepting Real Payments',
     pricing: '$0.03 USDC per query via x402',
-    environment: 'TESTNET',
-    note: 'Using testnet for testing. Will move to mainnet once CDP credentials are configured.',
+    environment: 'MAINNET',
     endpoints: {
       root: 'GET / - x402 payment requirements (returns 402)',
       sentiment: 'GET /v1/sentiment/:coin - Real-time crypto sentiment analysis (requires payment)',
@@ -239,19 +241,20 @@ app.get('/info', (req, res) => {
     },
     x402: {
       sdk: 'official',
-      facilitator: 'https://x402.org/facilitator',
-      network: 'eip155:84532',
-      networkName: 'Base Sepolia (Testnet)',
+      facilitator: 'https://api.cdp.coinbase.com/platform/v2/x402',
+      network: 'eip155:8453',
+      networkName: 'Base Mainnet',
       currency: 'USDC',
       amount: '0.03',
       recipient: payTo,
-      usdcContract: '0x036CbD53842c5426634e7929541eC2318f3dCF7e'
+      usdcContract: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
     },
     features: [
       'x402 protocol v2 compliant',
       'Official x402 SDK integration',
+      'CDP facilitator with authentication',
       'x402scan compatible',
-      'Testnet facilitator (no auth required)',
+      'Real USDC payments on Base mainnet',
       'Rate limiting (100 req/min)',
       'Payment tracking and logging'
     ],
@@ -264,7 +267,7 @@ app.get('/v1/sentiment/:coin', limiter, async (req, res) => {
   try {
     const coin = req.params.coin.toUpperCase();
     console.log(`🔍 Analyzing sentiment for ${coin}...`);
-    console.log('✅ Payment verified by x402 SDK (testnet)');
+    console.log('✅ Payment verified by x402 SDK (MAINNET)');
     
     const redditData = await fetchRedditData(coin);
     const analysis = analyzeSentiments(redditData);
@@ -290,7 +293,7 @@ app.get('/v1/sentiment/:coin', limiter, async (req, res) => {
       sources: ['reddit'],
       timestamp: new Date().toISOString(),
       cost: '0.03 USDC',
-      network: 'Base Sepolia (Testnet)'
+      network: 'Base Mainnet'
     };
     
     console.log(`✅ Sentiment analysis complete for ${coin}: ${signal}`);
@@ -316,19 +319,21 @@ app.get('/admin/payments', (req, res) => {
   
   res.json({
     totalPayments: paymentsDB.length,
-    totalRevenue: `$${totalRevenue.toFixed(2)}`,
+    totalRevenue: `$${totalRevenue.toFixed(2)} USDC`,
     recentPayments: paymentsDB.slice(-50),
     status: 'operational',
-    environment: 'testnet'
+    environment: 'mainnet'
   });
 });
 
 app.get('/health', (req, res) => {
+  const cdpConfigured = !!(process.env.CDP_API_KEY_NAME && process.env.CDP_API_KEY_PRIVATE_KEY);
+  
   res.json({ 
     status: 'healthy', 
     service: 'crypto-sentiment-api',
-    version: '2.0.0-testnet',
-    environment: 'TESTNET',
+    version: '2.0.0-mainnet',
+    environment: 'MAINNET',
     uptime: Math.floor(process.uptime()),
     totalPayments: paymentsDB.length,
     x402: {
@@ -336,30 +341,42 @@ app.get('/health', (req, res) => {
       compliant: true,
       sdk: 'official',
       version: 2,
-      facilitator: 'https://x402.org/facilitator',
-      network: 'eip155:84532',
-      networkName: 'Base Sepolia (Testnet)'
+      facilitator: 'https://api.cdp.coinbase.com/platform/v2/x402',
+      network: 'eip155:8453',
+      networkName: 'Base Mainnet',
+      cdpAuthenticated: cdpConfigured
     }
   });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
+  const cdpConfigured = !!(process.env.CDP_API_KEY_NAME && process.env.CDP_API_KEY_PRIVATE_KEY);
+  
   console.log(`\n${'='.repeat(70)}`);
-  console.log(`🚀 CryptoSentiment API - TESTNET MODE`);
+  console.log(`🚀 CryptoSentiment API - MAINNET PRODUCTION`);
   console.log(`${'='.repeat(70)}`);
   console.log(`📡 Server: http://localhost:${PORT}`);
-  console.log(`🌐 Environment: TESTNET (Base Sepolia)`);
-  console.log(`💰 x402 SDK: Official v2.0`);
-  console.log(`🔗 Facilitator: https://x402.org/facilitator (no auth required)`);
+  console.log(`🌐 Environment: MAINNET (Base)`);
+  console.log(`💰 x402 SDK: Official v2.0 with CDP`);
+  console.log(`🔗 Facilitator: https://api.cdp.coinbase.com/platform/v2/x402`);
+  console.log(`💵 Accepting REAL USDC payments!`);
   console.log(`📊 Payments: ${paymentsDB.length} processed`);
   console.log(`\n⚙️  Configuration:`);
-  console.log(`   Network: eip155:84532 (Base Sepolia testnet)`);
+  console.log(`   Network: eip155:8453 (Base Mainnet)`);
   console.log(`   Wallet: ${payTo}`);
-  console.log(`   Price: $0.03 testnet USDC`);
-  console.log(`\n✅ Ready for testnet testing!`);
-  console.log(`   No CDP credentials needed for testnet`);
-  console.log(`   Get testnet USDC from Base Sepolia faucet`);
+  console.log(`   Price: $0.03 USDC per query`);
+  console.log(`   CDP Authenticated: ${cdpConfigured ? '✅ YES' : '❌ NO'}`);
+  
+  if (!cdpConfigured) {
+    console.log(`\n⚠️  WARNING: CDP credentials not configured!`);
+    console.log(`   Set CDP_API_KEY_NAME and CDP_API_KEY_PRIVATE_KEY`);
+  } else {
+    console.log(`\n✅ READY FOR MAINNET PAYMENTS!`);
+    console.log(`   CDP authentication configured`);
+    console.log(`   Real USDC payments enabled`);
+  }
+  
   console.log(`${'='.repeat(70)}\n`);
 });
 
