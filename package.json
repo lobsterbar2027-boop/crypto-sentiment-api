@@ -1,39 +1,34 @@
 {
   "name": "crypto-sentiment-api",
   "version": "2.0.0",
-  "description": "Real-time crypto sentiment analysis API with x402 payment integration",
+  "description": "AI-powered cryptocurrency sentiment analysis API with x402 micropayments on Base Mainnet",
   "main": "sentiment-api.js",
   "scripts": {
-    "start": "node sentiment-api.js",
-    "dev": "nodemon sentiment-api.js"
+    "start": "node sentiment-api.js"
   },
-  "keywords": [
-    "crypto",
-    "sentiment",
-    "x402",
-    "bitcoin",
-    "ethereum",
-    "api",
-    "payment"
-  ],
-  "author": "GenVox",
-  "license": "ISC",
   "dependencies": {
-    "@x402/express": "latest",
-    "@x402/evm": "latest",
-    "@x402/core": "latest",
+    "@coinbase/x402": "^0.1.0",
+    "@x402/core": "^2.0.0",
+    "@x402/evm": "^2.0.0",
+    "@x402/express": "^2.0.0",
     "express": "^4.18.2",
     "cors": "^2.8.5",
     "sentiment": "^5.0.2",
     "vader-sentiment": "^1.1.3",
-    "ethers": "^6.9.0",
     "express-rate-limit": "^7.1.5",
     "node-fetch": "^3.3.2"
   },
-  "devDependencies": {
-    "nodemon": "^3.0.2"
-  },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "keywords": [
+    "x402",
+    "cryptocurrency",
+    "sentiment-analysis",
+    "micropayments",
+    "base",
+    "usdc"
+  ],
+  "author": "",
+  "license": "MIT"
 }
