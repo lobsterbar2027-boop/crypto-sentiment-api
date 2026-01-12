@@ -4,477 +4,399 @@ const Sentiment = require('sentiment');
 const vader = require('vader-sentiment');
 const rateLimit = require('express-rate-limit');
 const fs = require('fs');
-const crypto = require('crypto');
 
-// ✅ IMPORT OFFICIAL x402 SDK
+// ============================================================================
+// ✅ OFFICIAL x402 v2 SDK - MAINNET with ESM Solution
+// ============================================================================
 const { paymentMiddleware, x402ResourceServer } = require('@x402/express');
 const { ExactEvmScheme } = require('@x402/evm/exact/server');
-const { HTTPFacilitatorClient } = require('@x402/core/server');
 
-const app = express();
 const sentiment = new Sentiment();
-
-app.use(cors());
-app.use(express.json());
-
-// ✅ KEEP YOUR PAYMENT TRACKING
 const paymentsDB = [];
 
-const limiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 100,
-  message: { error: 'Too many requests, please slow down' }
-});
-
 // ============================================================================
-// ✅ CDP AUTHENTICATION - Convert Raw Ed25519 to PKCS8, then generate JWT
+// MAINNET CONFIGURATION
 // ============================================================================
-
-function convertRawEd25519ToPKCS8(rawBase64Key) {
-  try {
-    // Decode the base64 key (64 bytes: 32 private + 32 public)
-    const rawKey = Buffer.from(rawBase64Key, 'base64');
-    
-    // Extract first 32 bytes (the private key)
-    const privateKeyBytes = rawKey.subarray(0, 32);
-    
-    // PKCS8 prefix for Ed25519 private keys
-    const pkcs8Prefix = Buffer.from('302e020100300506032b657004220420', 'hex');
-    
-    // Concatenate prefix + private key bytes
-    const pkcs8Der = Buffer.concat([pkcs8Prefix, privateKeyBytes]);
-    
-    return pkcs8Der;
-  } catch (error) {
-    console.error('❌ Key conversion failed:', error.message);
-    return null;
-  }
-}
-
-function generateCDPJWT() {
-  const apiKeyId = process.env.CDP_API_KEY_ID;
-  const apiSecret = process.env.CDP_API_KEY_SECRET;
-  
-  if (!apiKeyId || !apiSecret) {
-    console.error('⚠️  CDP credentials not set!');
-    return null;
-  }
-
-  try {
-    // Convert raw Ed25519 key to PKCS8 DER format
-    const pkcs8Key = convertRawEd25519ToPKCS8(apiSecret);
-    if (!pkcs8Key) {
-      return null;
-    }
-
-    // Create KeyObject from PKCS8 DER
-    const privateKey = crypto.createPrivateKey({
-      key: pkcs8Key,
-      format: 'der',
-      type: 'pkcs8'
-    });
-
-    // JWT Header
-    const header = {
-      alg: 'EdDSA',
-      typ: 'JWT',
-      kid: apiKeyId
-    };
-
-    // JWT Payload
-    const now = Math.floor(Date.now() / 1000);
-    const payload = {
-      sub: apiKeyId,
-      iss: 'cdp',
-      nbf: now,
-      exp: now + 120, // Valid for 2 minutes
-      uri: 'GET api.cdp.coinbase.com/platform/v2/x402'
-    };
-
-    // Base64url encode header and payload
-    const base64Header = Buffer.from(JSON.stringify(header)).toString('base64url');
-    const base64Payload = Buffer.from(JSON.stringify(payload)).toString('base64url');
-    const message = `${base64Header}.${base64Payload}`;
-
-    // Sign the message with Ed25519
-    const signature = crypto.sign(null, Buffer.from(message), privateKey);
-    const base64Signature = signature.toString('base64url');
-
-    const jwt = `${message}.${base64Signature}`;
-    return jwt;
-
-  } catch (error) {
-    console.error('❌ JWT generation failed:', error.message);
-    return null;
-  }
-}
-
-// Create auth headers function for facilitator
-function createAuthHeaders() {
-  const jwt = generateCDPJWT();
-  if (!jwt) {
-    console.error('⚠️  Failed to generate JWT - check your CDP credentials');
-    return {};
-  }
-  return {
-    'Authorization': `Bearer ${jwt}`
-  };
-}
-
-// ============================================================================
-// ✅ CONFIGURE x402 SDK - MAINNET WITH CDP AUTHENTICATION
-// ============================================================================
-
 const payTo = process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f';
-
-// ✅ CDP Facilitator with Ed25519 JWT Authentication
-const facilitatorClient = new HTTPFacilitatorClient({
-  url: 'https://api.cdp.coinbase.com/platform/v2/x402',
-  createAuthHeaders: createAuthHeaders
-});
-
-// ✅ MAINNET: Base
-const server = new x402ResourceServer(facilitatorClient);
-server.register('eip155:8453', new ExactEvmScheme());  // Base mainnet
-
-const paymentConfig = {
-  'GET /v1/sentiment/:coin': {
-    accepts: [
-      {
-        scheme: 'exact',
-        price: '$0.03',
-        network: 'eip155:8453',  // Base mainnet
-        payTo,
-      },
-    ],
-    description: 'Real-time crypto sentiment analysis - Social media & Reddit sentiment for BTC, ETH, SOL and other cryptocurrencies',
-    mimeType: 'application/json',
-  },
-};
-
-// Custom middleware to track payments after x402 verification
-const trackPayment = (req, res, next) => {
-  const originalJson = res.json.bind(res);
-  
-  res.json = function(data) {
-    if (data.coin && data.signal && res.statusCode === 200) {
-      const paymentRecord = {
-        id: req.headers['x-payment'] ? 
-          Buffer.from(req.headers['x-payment'], 'base64').toString().slice(0, 20) : 
-          Date.now().toString(),
-        timestamp: new Date().toISOString(),
-        amount: '0.03',
-        coin: data.coin,
-        from: 'verified'
-      };
-      
-      paymentsDB.push(paymentRecord);
-      
-      const logLine = `${paymentRecord.timestamp},${paymentRecord.amount},${paymentRecord.coin},${paymentRecord.from}\n`;
-      try {
-        fs.appendFileSync('payments.log', logLine);
-      } catch (e) {
-        console.error('Failed to write payment log:', e);
-      }
-      
-      console.log('✅ PAYMENT TRACKED:', paymentRecord);
-    }
-    
-    return originalJson(data);
-  };
-  
-  next();
-};
-
-// ✅ APPLY x402 PAYMENT MIDDLEWARE + YOUR TRACKING
-app.use(paymentMiddleware(paymentConfig, server));
-app.use('/v1/sentiment/:coin', trackPayment);
+const network = 'eip155:8453'; // Base Mainnet
+const networkName = 'Base Mainnet';
+const usdcContract = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'; // Base mainnet USDC
 
 // ============================================================================
-// YOUR ORIGINAL SENTIMENT ANALYSIS FUNCTIONS - UNCHANGED
+// ESM MODULE SOLUTION - Dynamic import() for @coinbase/x402
 // ============================================================================
-
-async function fetchRedditData(coin) {
-  try {
-    const subreddits = ['CryptoCurrency', 'Bitcoin', 'ethereum', 'CryptoMarkets'];
-    const mentions = [];
-    
-    for (const sub of subreddits) {
-      const url = `https://www.reddit.com/r/${sub}/hot.json?limit=100`;
-      const fetch = (await import('node-fetch')).default;
-      
-      const response = await fetch(url, {
-        headers: { 'User-Agent': 'CryptoSentimentBot/1.0' }
-      });
-      
-      if (!response.ok) {
-        console.log(`Reddit fetch failed for r/${sub}:`, response.status);
-        continue;
-      }
-      
-      const data = await response.json();
-      const posts = data.data.children;
-      
-      posts.forEach(post => {
-        const title = post.data.title.toUpperCase();
-        const selftext = (post.data.selftext || '').toUpperCase();
-        const combinedText = title + ' ' + selftext;
-        
-        if (combinedText.includes(coin.toUpperCase()) || 
-            combinedText.includes(`$${coin.toUpperCase()}`)) {
-          mentions.push({
-            text: post.data.title + ' ' + (post.data.selftext || ''),
-            score: post.data.score,
-            subreddit: sub
-          });
-        }
-      });
-    }
-    
-    return mentions;
-  } catch (error) {
-    console.error('Reddit fetch error:', error);
-    return [];
-  }
-}
-
-function analyzeSentiments(texts) {
-  if (texts.length === 0) {
-    return {
-      vaderAvg: 0,
-      positive: 33,
-      negative: 33,
-      neutral: 34,
-      totalMentions: 0
-    };
-  }
+async function initializeApp() {
+  const app = express();
   
-  let totalVader = 0;
-  let positive = 0;
-  let negative = 0;
-  let neutral = 0;
-  
-  texts.forEach(item => {
-    const vaderScore = vader.SentimentIntensityAnalyzer.polarity_scores(item.text);
-    totalVader += vaderScore.compound;
-    
-    if (vaderScore.compound > 0.05) positive++;
-    else if (vaderScore.compound < -0.05) negative++;
-    else neutral++;
+  app.use(cors());
+  app.use(express.json());
+
+  const limiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 100,
+    message: { error: 'Too many requests, please slow down' }
   });
-  
-  const count = texts.length;
-  
-  return {
-    vaderAvg: totalVader / count,
-    positive: Math.round((positive / count) * 100),
-    negative: Math.round((negative / count) * 100),
-    neutral: Math.round((neutral / count) * 100),
-    totalMentions: count
-  };
-}
 
-// ============================================================================
-// API ROUTES
-// ============================================================================
+  console.log('🔄 Loading CDP facilitator...');
+  
+  // Dynamic import to handle ESM module in CommonJS
+  let facilitatorConfig;
+  try {
+    const cdpModule = await import('@coinbase/x402');
+    facilitatorConfig = cdpModule.facilitator;
+    console.log('✅ CDP facilitator loaded successfully');
+  } catch (error) {
+    console.error('❌ Failed to load @coinbase/x402:', error.message);
+    console.error('\n⚠️  Make sure you have:');
+    console.error('   1. Installed: npm install @coinbase/x402');
+    console.error('   2. Set environment variables:');
+    console.error('      CDP_API_KEY_ID=your-api-key-id');
+    console.error('      CDP_API_KEY_SECRET=your-api-key-secret');
+    process.exit(1);
+  }
 
-app.get('/', (req, res) => {
-  return res.status(402).json({
-    x402Version: 1,
-    error: 'X-PAYMENT header is required',
-    accepts: [{
-      scheme: 'exact',
-      network: 'eip155:8453',
-      maxAmountRequired: '30000',
-      asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-      payTo: payTo,
-      resource: 'https://crypto-sentiment-api-production.up.railway.app/v1/sentiment/BTC',
+  // Verify environment variables
+  if (!process.env.CDP_API_KEY_ID || !process.env.CDP_API_KEY_SECRET) {
+    console.error('\n❌ Missing required environment variables:');
+    console.error('   CDP_API_KEY_ID');
+    console.error('   CDP_API_KEY_SECRET');
+    console.error('\nGet them from: https://portal.cdp.coinbase.com/projects/api-keys');
+    process.exit(1);
+  }
+
+  console.log('✅ CDP credentials found');
+
+  // ============================================================================
+  // x402 SERVER SETUP
+  // ============================================================================
+
+  const server = new x402ResourceServer(facilitatorConfig);
+  server.register(network, new ExactEvmScheme());
+
+  const paymentConfig = {
+    'GET /v1/sentiment/:coin': {
+      accepts: [
+        {
+          scheme: 'exact',
+          price: '$0.03',
+          network: network,
+          payTo,
+        },
+      ],
       description: 'Real-time crypto sentiment analysis - Social media & Reddit sentiment for BTC, ETH, SOL and other cryptocurrencies',
       mimeType: 'application/json',
-      maxTimeoutSeconds: 60,
-      outputSchema: {
-        input: {
-          type: "http",
-          method: "GET"
-        },
-        output: {
-          coin: { type: "string" },
-          signal: { type: "string", enum: ["STRONG BUY", "BUY", "NEUTRAL", "SELL", "STRONG SELL"] },
-          score: { type: "number" },
-          positive: { type: "number" },
-          negative: { type: "number" },
-          neutral: { type: "number" },
-          mentions: { type: "number" },
-          trend: { type: "string" },
-          sources: { type: "array" },
-          timestamp: { type: "string" },
-          cost: { type: "string" }
+    },
+  };
+
+  // Payment tracking middleware
+  const trackPayment = (req, res, next) => {
+    const originalJson = res.json.bind(res);
+    
+    res.json = function(data) {
+      if (data.coin && data.signal && res.statusCode === 200) {
+        const paymentRecord = {
+          id: req.headers['x-payment'] ? 
+            Buffer.from(req.headers['x-payment'], 'base64').toString().slice(0, 20) : 
+            Date.now().toString(),
+          timestamp: new Date().toISOString(),
+          amount: '0.03',
+          coin: data.coin,
+          from: 'verified'
+        };
+        
+        paymentsDB.push(paymentRecord);
+        
+        const logLine = `${paymentRecord.timestamp},${paymentRecord.amount},${paymentRecord.coin},${paymentRecord.from}\n`;
+        try {
+          fs.appendFileSync('payments.log', logLine);
+        } catch (e) {
+          console.error('Failed to write payment log:', e);
         }
-      },
-      extra: {
-        name: 'USD Coin',
-        version: '2'
+        
+        console.log('💰 MAINNET PAYMENT RECEIVED:', paymentRecord);
       }
-    }]
-  });
-});
-
-app.get('/info', (req, res) => {
-  res.json({
-    name: 'CryptoSentiment API',
-    version: '2.0.0-mainnet',
-    status: 'Production - Accepting Real Payments',
-    pricing: '$0.03 USDC per query via x402',
-    environment: 'MAINNET',
-    endpoints: {
-      root: 'GET / - x402 payment requirements (returns 402)',
-      sentiment: 'GET /v1/sentiment/:coin - Real-time crypto sentiment analysis (requires payment)',
-      info: 'GET /info - API documentation (this page)',
-      health: 'GET /health - API health status',
-      admin: 'GET /admin/payments - Payment history (requires X-Admin-Key)'
-    },
-    x402: {
-      sdk: 'official',
-      facilitator: 'https://api.cdp.coinbase.com/platform/v2/x402',
-      authentication: 'Ed25519 JWT (PKCS8)',
-      network: 'eip155:8453',
-      networkName: 'Base Mainnet',
-      currency: 'USDC',
-      amount: '0.03',
-      recipient: payTo,
-      usdcContract: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
-    },
-    features: [
-      'x402 protocol v2 compliant',
-      'Official x402 SDK integration',
-      'CDP facilitator with Ed25519 JWT auth',
-      'x402scan compatible',
-      'Real USDC payments on Base mainnet',
-      'Rate limiting (100 req/min)',
-      'Payment tracking and logging'
-    ],
-    supportedCoins: ['BTC', 'ETH', 'SOL', 'DOGE', 'ADA', 'XRP', 'DOT', 'MATIC', 'LINK', 'UNI'],
-    documentation: 'https://docs.cdp.coinbase.com/x402'
-  });
-});
-
-app.get('/v1/sentiment/:coin', limiter, async (req, res) => {
-  try {
-    const coin = req.params.coin.toUpperCase();
-    console.log(`🔍 Analyzing sentiment for ${coin}...`);
-    console.log('✅ Payment verified by x402 SDK (MAINNET)');
-    
-    const redditData = await fetchRedditData(coin);
-    const analysis = analyzeSentiments(redditData);
-    const compositeScore = analysis.vaderAvg;
-    
-    let signal = 'NEUTRAL';
-    if (compositeScore > 0.15) signal = 'STRONG BUY';
-    else if (compositeScore > 0.05) signal = 'BUY';
-    else if (compositeScore < -0.15) signal = 'STRONG SELL';
-    else if (compositeScore < -0.05) signal = 'SELL';
-    
-    const trend = compositeScore > 0 ? 'up' : 'down';
-    
-    const response = {
-      coin,
-      signal,
-      score: parseFloat(compositeScore.toFixed(3)),
-      positive: analysis.positive,
-      negative: analysis.negative,
-      neutral: analysis.neutral,
-      mentions: analysis.totalMentions,
-      trend,
-      sources: ['reddit'],
-      timestamp: new Date().toISOString(),
-      cost: '0.03 USDC',
-      network: 'Base Mainnet'
+      
+      return originalJson(data);
     };
     
-    console.log(`✅ Sentiment analysis complete for ${coin}: ${signal}`);
-    res.json(response);
+    next();
+  };
+
+  app.use(paymentMiddleware(paymentConfig, server));
+  app.use('/v1/sentiment/:coin', trackPayment);
+
+  // ============================================================================
+  // SENTIMENT ANALYSIS
+  // ============================================================================
+
+  async function fetchRedditData(coin) {
+    try {
+      const subreddits = ['CryptoCurrency', 'Bitcoin', 'ethereum', 'CryptoMarkets'];
+      const mentions = [];
+      
+      for (const sub of subreddits) {
+        const url = `https://www.reddit.com/r/${sub}/hot.json?limit=100`;
+        const fetch = (await import('node-fetch')).default;
+        
+        const response = await fetch(url, {
+          headers: { 'User-Agent': 'CryptoSentimentBot/1.0' }
+        });
+        
+        if (!response.ok) {
+          console.log(`Reddit fetch failed for r/${sub}:`, response.status);
+          continue;
+        }
+        
+        const data = await response.json();
+        const posts = data.data.children;
+        
+        posts.forEach(post => {
+          const title = post.data.title.toUpperCase();
+          const selftext = (post.data.selftext || '').toUpperCase();
+          const combinedText = title + ' ' + selftext;
+          
+          if (combinedText.includes(coin.toUpperCase()) || 
+              combinedText.includes(`$${coin.toUpperCase()}`)) {
+            mentions.push({
+              text: post.data.title + ' ' + (post.data.selftext || ''),
+              score: post.data.score,
+              subreddit: sub
+            });
+          }
+        });
+      }
+      
+      return mentions;
+    } catch (error) {
+      console.error('Reddit fetch error:', error);
+      return [];
+    }
+  }
+
+  function analyzeSentiments(texts) {
+    if (texts.length === 0) {
+      return {
+        vaderAvg: 0,
+        positive: 33,
+        negative: 33,
+        neutral: 34,
+        totalMentions: 0
+      };
+    }
     
-  } catch (error) {
-    console.error('Analysis error:', error);
-    res.status(500).json({ 
-      error: 'Analysis failed', 
-      message: error.message 
+    let totalVader = 0;
+    let positive = 0;
+    let negative = 0;
+    let neutral = 0;
+    
+    texts.forEach(item => {
+      const vaderScore = vader.SentimentIntensityAnalyzer.polarity_scores(item.text);
+      totalVader += vaderScore.compound;
+      
+      if (vaderScore.compound > 0.05) positive++;
+      else if (vaderScore.compound < -0.05) negative++;
+      else neutral++;
     });
+    
+    const count = texts.length;
+    
+    return {
+      vaderAvg: totalVader / count,
+      positive: Math.round((positive / count) * 100),
+      negative: Math.round((negative / count) * 100),
+      neutral: Math.round((neutral / count) * 100),
+      totalMentions: count
+    };
   }
-});
 
-app.get('/admin/payments', (req, res) => {
-  const apiKey = req.headers['x-admin-key'];
-  
-  if (apiKey !== process.env.ADMIN_KEY) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  
-  const totalRevenue = paymentsDB.length * 0.03;
-  
-  res.json({
-    totalPayments: paymentsDB.length,
-    totalRevenue: `$${totalRevenue.toFixed(2)} USDC`,
-    recentPayments: paymentsDB.slice(-50),
-    status: 'operational',
-    environment: 'mainnet'
+  // ============================================================================
+  // API ROUTES
+  // ============================================================================
+
+  app.get('/', (req, res) => {
+    return res.status(402).json({
+      x402Version: 1,
+      error: 'X-PAYMENT header is required',
+      accepts: [{
+        scheme: 'exact',
+        network: network,
+        maxAmountRequired: '30000',
+        asset: usdcContract,
+        payTo: payTo,
+        resource: `https://crypto-sentiment-api-production.up.railway.app/v1/sentiment/BTC`,
+        description: 'Real-time crypto sentiment analysis - Social media & Reddit sentiment for BTC, ETH, SOL and other cryptocurrencies',
+        mimeType: 'application/json',
+        maxTimeoutSeconds: 60,
+        outputSchema: {
+          input: { type: "http", method: "GET" },
+          output: {
+            coin: { type: "string" },
+            signal: { type: "string", enum: ["STRONG BUY", "BUY", "NEUTRAL", "SELL", "STRONG SELL"] },
+            score: { type: "number" },
+            positive: { type: "number" },
+            negative: { type: "number" },
+            neutral: { type: "number" },
+            mentions: { type: "number" },
+            trend: { type: "string" },
+            sources: { type: "array" },
+            timestamp: { type: "string" },
+            cost: { type: "string" }
+          }
+        },
+        extra: { name: 'USD Coin', version: '2' }
+      }]
+    });
   });
-});
 
-app.get('/health', (req, res) => {
-  const cdpConfigured = !!(process.env.CDP_API_KEY_ID && process.env.CDP_API_KEY_SECRET);
-  
-  res.json({ 
-    status: 'healthy', 
-    service: 'crypto-sentiment-api',
-    version: '2.0.0-mainnet',
-    environment: 'MAINNET',
-    uptime: Math.floor(process.uptime()),
-    totalPayments: paymentsDB.length,
-    x402: {
-      enabled: true,
-      compliant: true,
-      sdk: 'official',
-      version: 2,
-      facilitator: 'https://api.cdp.coinbase.com/platform/v2/x402',
-      network: 'eip155:8453',
-      networkName: 'Base Mainnet',
-      cdpAuthenticated: cdpConfigured,
-      authMethod: 'Ed25519 JWT with PKCS8 conversion'
+  app.get('/info', (req, res) => {
+    res.json({
+      name: 'CryptoSentiment API',
+      version: '2.0.0',
+      status: 'Production - Mainnet',
+      pricing: '$0.03 USDC per query via x402',
+      environment: 'MAINNET',
+      endpoints: {
+        root: 'GET / - x402 payment requirements (returns 402)',
+        sentiment: 'GET /v1/sentiment/:coin - Real-time crypto sentiment analysis (requires payment)',
+        info: 'GET /info - API documentation (this page)',
+        health: 'GET /health - API health status',
+        admin: 'GET /admin/payments - Payment history (requires X-Admin-Key)'
+      },
+      x402: {
+        sdk: 'official v2',
+        facilitator: 'https://api.cdp.coinbase.com/platform/v2/x402',
+        network: network,
+        networkName: networkName,
+        currency: 'USDC',
+        amount: '0.03',
+        recipient: payTo,
+        usdcContract: usdcContract
+      },
+      features: [
+        'x402 protocol v2 compliant',
+        'Official x402 SDK integration',
+        'CDP facilitator with authentication',
+        'Real USDC payments on Base Mainnet',
+        'x402scan compatible',
+        'Rate limiting (100 req/min)',
+        'Payment tracking and logging'
+      ],
+      supportedCoins: ['BTC', 'ETH', 'SOL', 'DOGE', 'ADA', 'XRP', 'DOT', 'MATIC', 'LINK', 'UNI'],
+      documentation: 'https://docs.cdp.coinbase.com/x402'
+    });
+  });
+
+  app.get('/v1/sentiment/:coin', limiter, async (req, res) => {
+    try {
+      const coin = req.params.coin.toUpperCase();
+      console.log(`🔍 Analyzing sentiment for ${coin}...`);
+      console.log('✅ Payment verified by CDP facilitator (MAINNET)');
+      
+      const redditData = await fetchRedditData(coin);
+      const analysis = analyzeSentiments(redditData);
+      const compositeScore = analysis.vaderAvg;
+      
+      let signal = 'NEUTRAL';
+      if (compositeScore > 0.15) signal = 'STRONG BUY';
+      else if (compositeScore > 0.05) signal = 'BUY';
+      else if (compositeScore < -0.15) signal = 'STRONG SELL';
+      else if (compositeScore < -0.05) signal = 'SELL';
+      
+      const trend = compositeScore > 0 ? 'up' : 'down';
+      
+      const response = {
+        coin,
+        signal,
+        score: parseFloat(compositeScore.toFixed(3)),
+        positive: analysis.positive,
+        negative: analysis.negative,
+        neutral: analysis.neutral,
+        mentions: analysis.totalMentions,
+        trend,
+        sources: ['reddit'],
+        timestamp: new Date().toISOString(),
+        cost: '0.03 USDC',
+        network: networkName,
+        paymentNetwork: 'Base Mainnet'
+      };
+      
+      console.log(`✅ Sentiment analysis complete for ${coin}: ${signal}`);
+      res.json(response);
+      
+    } catch (error) {
+      console.error('Analysis error:', error);
+      res.status(500).json({ error: 'Analysis failed', message: error.message });
     }
   });
-});
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  const cdpConfigured = !!(process.env.CDP_API_KEY_ID && process.env.CDP_API_KEY_SECRET);
-  
-  console.log(`\n${'='.repeat(70)}`);
-  console.log(`🚀 CryptoSentiment API - MAINNET PRODUCTION`);
-  console.log(`${'='.repeat(70)}`);
-  console.log(`📡 Server: http://localhost:${PORT}`);
-  console.log(`🌐 Environment: MAINNET (Base)`);
-  console.log(`💰 x402 SDK: Official v2.0 with Ed25519 JWT`);
-  console.log(`🔗 Facilitator: https://api.cdp.coinbase.com/platform/v2/x402`);
-  console.log(`💵 Accepting REAL USDC payments!`);
-  console.log(`📊 Payments: ${paymentsDB.length} processed`);
-  console.log(`\n⚙️  Configuration:`);
-  console.log(`   Network: eip155:8453 (Base Mainnet)`);
-  console.log(`   Wallet: ${payTo}`);
-  console.log(`   Price: $0.03 USDC per query`);
-  console.log(`   CDP Authenticated: ${cdpConfigured ? '✅ YES' : '❌ NO'}`);
-  
-  if (!cdpConfigured) {
-    console.log(`\n⚠️  WARNING: CDP credentials not configured!`);
-    console.log(`   Set CDP_API_KEY_ID and CDP_API_KEY_SECRET`);
-  } else {
+  app.get('/admin/payments', (req, res) => {
+    const apiKey = req.headers['x-admin-key'];
+    if (apiKey !== process.env.ADMIN_KEY) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    
+    const totalRevenue = paymentsDB.length * 0.03;
+    res.json({
+      totalPayments: paymentsDB.length,
+      totalRevenue: `$${totalRevenue.toFixed(2)} USDC`,
+      recentPayments: paymentsDB.slice(-50),
+      status: 'operational',
+      environment: 'MAINNET'
+    });
+  });
+
+  app.get('/health', (req, res) => {
+    res.json({ 
+      status: 'healthy', 
+      service: 'crypto-sentiment-api',
+      version: '2.0.0',
+      environment: 'MAINNET',
+      uptime: Math.floor(process.uptime()),
+      totalPayments: paymentsDB.length,
+      x402: {
+        enabled: true,
+        compliant: true,
+        sdk: 'official v2',
+        version: 2,
+        facilitator: 'https://api.cdp.coinbase.com/platform/v2/x402',
+        network: network,
+        networkName: networkName,
+        authentication: 'CDP API Keys (Ed25519)'
+      }
+    });
+  });
+
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`\n${'='.repeat(70)}`);
+    console.log(`🚀 CryptoSentiment API - MAINNET PRODUCTION`);
+    console.log(`${'='.repeat(70)}`);
+    console.log(`📡 Server: http://localhost:${PORT}`);
+    console.log(`🌐 Environment: MAINNET (${networkName})`);
+    console.log(`💰 x402 SDK: Official v2.0 with CDP facilitator`);
+    console.log(`🔗 Facilitator: https://api.cdp.coinbase.com/platform/v2/x402`);
+    console.log(`💵 Accepting REAL USDC payments on Base Mainnet`);
+    console.log(`📊 Payments processed: ${paymentsDB.length}`);
+    console.log(`\n⚙️  Configuration:`);
+    console.log(`   Network: ${network}`);
+    console.log(`   USDC Contract: ${usdcContract}`);
+    console.log(`   Wallet: ${payTo}`);
+    console.log(`   Price: $0.03 USDC per query`);
+    console.log(`   Authentication: CDP API Keys ✅`);
     console.log(`\n✅ READY FOR MAINNET PAYMENTS!`);
-    console.log(`   Ed25519 key converted to PKCS8`);
-    console.log(`   JWT authentication configured`);
-    console.log(`   Real USDC payments enabled`);
-  }
-  
-  console.log(`${'='.repeat(70)}\n`);
-});
+    console.log(`   Real USDC on Base Mainnet`);
+    console.log(`   CDP facilitator authenticated`);
+    console.log(`   All systems operational`);
+    console.log(`${'='.repeat(70)}\n`);
+  });
 
-module.exports = app;
+  return app;
+}
+
+// ============================================================================
+// START THE SERVER
+// ============================================================================
+initializeApp().catch(error => {
+  console.error('❌ Failed to start server:', error);
+  process.exit(1);
+});
