@@ -10,6 +10,7 @@ const fs = require('fs');
 // ============================================================================
 const { paymentMiddleware, x402ResourceServer } = require('@x402/express');
 const { ExactEvmScheme } = require('@x402/evm/exact/server');
+const { HTTPFacilitatorClient } = require('@x402/core/server');
 
 const sentiment = new Sentiment();
 const paymentsDB = [];
@@ -44,7 +45,7 @@ async function initializeApp() {
   try {
     const cdpModule = await import('@coinbase/x402');
     facilitatorConfig = cdpModule.facilitator;
-    console.log('✅ CDP facilitator loaded successfully');
+    console.log('✅ CDP facilitator config loaded successfully');
   } catch (error) {
     console.error('❌ Failed to load @coinbase/x402:', error.message);
     console.error('\n⚠️  Make sure you have:');
@@ -67,10 +68,14 @@ async function initializeApp() {
   console.log('✅ CDP credentials found');
 
   // ============================================================================
-  // x402 SERVER SETUP
+  // x402 SERVER SETUP - FIXED: Wrap config in HTTPFacilitatorClient
   // ============================================================================
 
-  const server = new x402ResourceServer(facilitatorConfig);
+  // Create the facilitator CLIENT from the config
+  const facilitatorClient = new HTTPFacilitatorClient(facilitatorConfig);
+  console.log('✅ Facilitator client created');
+
+  const server = new x402ResourceServer(facilitatorClient);
   server.register(network, new ExactEvmScheme());
 
   const paymentConfig = {
