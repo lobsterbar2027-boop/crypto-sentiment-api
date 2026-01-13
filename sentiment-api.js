@@ -5,10 +5,13 @@ import vaderSentiment from 'vader-sentiment';
 import rateLimit from 'express-rate-limit';
 import {
   facilitator,
-  createFacilitatorConfig,
-  HTTPFacilitatorClient
+  createFacilitatorConfig
 } from '@coinbase/x402';
-import { x402ResourceServer, assetKind } from '@x402/core';
+import { 
+  x402ResourceServer, 
+  assetKind,
+  HTTPFacilitatorClient  // ← HTTPFacilitatorClient is in @x402/core, not @coinbase/x402
+} from '@x402/core';
 import { evmAddress } from '@x402/evm';
 import { makeExpressRouter } from '@x402/express';
 
@@ -22,8 +25,8 @@ app.use(express.json());
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 100
 });
 app.use(limiter);
 
