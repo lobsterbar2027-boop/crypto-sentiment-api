@@ -3,15 +3,8 @@ import cors from 'cors';
 import Sentiment from 'sentiment';
 import vaderSentiment from 'vader-sentiment';
 import rateLimit from 'express-rate-limit';
-import {
-  facilitator,
-  createFacilitatorConfig
-} from '@coinbase/x402';
-import { 
-  x402ResourceServer, 
-  assetKind,
-  HTTPFacilitatorClient  // ← HTTPFacilitatorClient is in @x402/core, not @coinbase/x402
-} from '@x402/core';
+import { createFacilitatorConfig } from '@coinbase/x402';
+import { x402ResourceServer, assetKind } from '@x402/core';
 import { evmAddress } from '@x402/evm';
 import { makeExpressRouter } from '@x402/express';
 
@@ -36,11 +29,11 @@ console.log('🔄 Initializing CDP facilitator...');
 // FIX: Replace literal \n with actual newlines (Railway strips them)
 const cdpSecret = process.env.CDP_API_KEY_SECRET.replace(/\\n/g, '\n');
 
+// Create facilitator config (returns object that can be used directly)
 const facilitatorConfig = createFacilitatorConfig(
   process.env.CDP_API_KEY_ID,
   cdpSecret
 );
-const facilitatorClient = new HTTPFacilitatorClient(facilitatorConfig);
 
 console.log('✅ CDP facilitator configured');
 
@@ -55,9 +48,9 @@ const MAINNET_CONFIG = {
 // Payment tracking
 const paymentLog = [];
 
-// Create x402 resource server with CDP facilitator
+// Create x402 resource server with CDP facilitator config
 const x402Server = new x402ResourceServer({
-  facilitator: facilitatorClient,
+  facilitator: facilitatorConfig,  // Use config directly, no wrapper needed
   kind: assetKind({
     scheme: 'exact',
     network: MAINNET_CONFIG.network,
