@@ -3,10 +3,11 @@ import cors from 'cors';
 import Sentiment from 'sentiment';
 import vaderSentiment from 'vader-sentiment';
 import rateLimit from 'express-rate-limit';
-import { createFacilitatorConfig } from '@coinbase/x402';
-import { x402ResourceServer, assetKind } from '@x402/core';
-import { evmAddress } from '@x402/evm';
-import { makeExpressRouter } from '@x402/express';
+
+// x402 v2 imports - correct packages
+import { paymentMiddleware, x402ResourceServer } from '@x402/express';
+import { ExactEvmScheme } from '@x402/evm/exact/server';
+import { HTTPFacilitatorClient } from '@x402/core/server';
 
 const app = express();
 const sentiment = new Sentiment();
@@ -23,42 +24,37 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// Configure CDP facilitator for mainnet
-console.log('🔄 Initializing CDP facilitator...');
+// Configuration
+const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
+const NEWS_API_KEY = process.env.NEWS_API_KEY || 'demo';
 
-// FIX: Replace literal \n with actual newlines (Railway strips them)
-const cdpSecret = process.env.CDP_API_KEY_SECRET.replace(/\\n/g, '\n');
+// x402 v2 Configuration using CAIP-2 network identifiers
+const MAINNET_NETWORK = 'eip155:8453'; // Base mainnet
+const TESTNET_NETWORK = 'eip155:84532'; // Base Sepolia (for testing)
 
-// Create facilitator config (returns object that can be used directly)
-const facilitatorConfig = createFacilitatorConfig(
-  process.env.CDP_API_KEY_ID,
-  cdpSecret
-);
+// Use mainnet or testnet based on environment
+const NETWORK = process.env.USE_TESTNET === 'true' ? TESTNET_NETWORK : MAINNET_NETWORK;
+const FACILITATOR_URL = process.env.USE_TESTNET === 'true' 
+  ? 'https://x402.org/facilitator'  // Testnet facilitator
+  : 'https://api.cdp.coinbase.com/platform/v2/x402'; // CDP mainnet facilitator
 
-console.log('✅ CDP facilitator configured');
+console.log('🔄 Initializing x402 v2...');
 
-// x402 Configuration
-const MAINNET_CONFIG = {
-  network: 'eip155:8453',
-  usdcContract: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-  walletAddress: process.env.WALLET_ADDRESS,
-  pricePerQuery: '30000' // $0.03 in USDC (6 decimals)
-};
+// Create facilitator client
+const facilitatorClient = new HTTPFacilitatorClient({
+  url: FACILITATOR_URL,
+  // CDP facilitator may require additional auth headers in production
+  // headers: { 'Authorization': `Bearer ${process.env.CDP_API_KEY}` }
+});
+
+// Create x402 resource server and register EVM scheme for the network
+const server = new x402ResourceServer(facilitatorClient)
+  .register(NETWORK, new ExactEvmScheme());
+
+console.log('✅ x402 v2 configured');
 
 // Payment tracking
 const paymentLog = [];
-
-// Create x402 resource server with CDP facilitator config
-const x402Server = new x402ResourceServer({
-  facilitator: facilitatorConfig,  // Use config directly, no wrapper needed
-  kind: assetKind({
-    scheme: 'exact',
-    network: MAINNET_CONFIG.network,
-    maxAmountRequired: MAINNET_CONFIG.pricePerQuery,
-    asset: evmAddress(MAINNET_CONFIG.usdcContract),
-    payTo: evmAddress(MAINNET_CONFIG.walletAddress)
-  })
-});
 
 // Helper: Analyze sentiment
 function analyzeSentiment(text) {
@@ -87,7 +83,7 @@ async function fetchCryptoNews(symbol) {
   try {
     const query = `${symbol} cryptocurrency`;
     const response = await fetch(
-      `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&pageSize=10&sortBy=publishedAt&apiKey=${process.env.NEWS_API_KEY || 'demo'}`
+      `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&pageSize=10&sortBy=publishedAt&apiKey=${NEWS_API_KEY}`
     );
     if (!response.ok) return [];
     const data = await response.json();
@@ -98,77 +94,128 @@ async function fetchCryptoNews(symbol) {
   }
 }
 
-// x402 Protected Route
-x402Server.route('GET', '/v1/sentiment/:coin', async (req) => {
-  const coin = req.params.coin.toUpperCase();
-  const articles = await fetchCryptoNews(coin);
-
-  let overallSentiment = { score: 0, count: 0 };
-  const analyzed = articles.slice(0, 5).map(article => {
-    const text = `${article.title} ${article.description || ''}`;
-    const result = analyzeSentiment(text);
-    overallSentiment.score += result.score;
-    overallSentiment.count++;
-    return {
-      title: article.title,
-      source: article.source.name,
-      sentiment: result
-    };
-  });
-
-  const avgScore = overallSentiment.count > 0
-    ? overallSentiment.score / overallSentiment.count
-    : 0;
-
-  let overallLabel;
-  if (avgScore > 0.2) overallLabel = 'bullish';
-  else if (avgScore < -0.2) overallLabel = 'bearish';
-  else overallLabel = 'neutral';
-
-  // Log payment
-  const payment = {
-    timestamp: new Date().toISOString(),
-    amount: '0.03',
-    coin
-  };
-  paymentLog.push(payment);
-  console.log('💰 MAINNET PAYMENT RECEIVED:', payment);
-
-  return {
-    coin,
-    timestamp: new Date().toISOString(),
-    overall: {
-      sentiment: overallLabel,
-      score: parseFloat(avgScore.toFixed(4)),
-      confidence: Math.abs(avgScore),
-      articlesAnalyzed: overallSentiment.count
+// x402 Payment Middleware - protects the sentiment endpoint
+app.use(
+  paymentMiddleware(
+    {
+      'GET /v1/sentiment/:coin': {
+        accepts: [
+          {
+            scheme: 'exact',
+            price: '$0.03', // $0.03 USDC per query
+            network: NETWORK,
+            payTo: WALLET_ADDRESS,
+          },
+        ],
+        description: 'Get AI-powered sentiment analysis for any cryptocurrency based on recent news',
+        mimeType: 'application/json',
+      },
     },
-    articles: analyzed,
-    payment: {
-      network: 'Base Mainnet',
-      amount: '0.03 USDC',
-      status: 'confirmed'
-    }
-  };
+    server,
+  ),
+);
+
+// Protected sentiment endpoint
+app.get('/v1/sentiment/:coin', async (req, res) => {
+  try {
+    const coin = req.params.coin.toUpperCase();
+    const articles = await fetchCryptoNews(coin);
+
+    let overallSentiment = { score: 0, count: 0 };
+    const analyzed = articles.slice(0, 5).map(article => {
+      const text = `${article.title} ${article.description || ''}`;
+      const result = analyzeSentiment(text);
+      overallSentiment.score += result.score;
+      overallSentiment.count++;
+      return {
+        title: article.title,
+        source: article.source?.name || 'Unknown',
+        url: article.url,
+        publishedAt: article.publishedAt,
+        sentiment: result
+      };
+    });
+
+    const avgScore = overallSentiment.count > 0
+      ? overallSentiment.score / overallSentiment.count
+      : 0;
+
+    let overallLabel;
+    if (avgScore > 0.2) overallLabel = 'bullish';
+    else if (avgScore < -0.2) overallLabel = 'bearish';
+    else overallLabel = 'neutral';
+
+    // Log payment
+    const payment = {
+      timestamp: new Date().toISOString(),
+      amount: '0.03',
+      coin
+    };
+    paymentLog.push(payment);
+    console.log('💰 PAYMENT RECEIVED:', payment);
+
+    res.json({
+      coin,
+      timestamp: new Date().toISOString(),
+      overall: {
+        sentiment: overallLabel,
+        score: parseFloat(avgScore.toFixed(4)),
+        confidence: Math.abs(avgScore),
+        articlesAnalyzed: overallSentiment.count
+      },
+      articles: analyzed,
+      payment: {
+        network: NETWORK === MAINNET_NETWORK ? 'Base Mainnet' : 'Base Sepolia',
+        amount: '0.03 USDC',
+        status: 'confirmed'
+      }
+    });
+  } catch (error) {
+    console.error('Sentiment analysis error:', error);
+    res.status(500).json({ error: 'Failed to analyze sentiment' });
+  }
 });
 
-// Mount x402 router
-app.use(makeExpressRouter(x402Server));
-
-// Health check
+// Health check (free endpoint)
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
-    environment: 'MAINNET',
-    network: 'Base Mainnet (eip155:8453)',
+    environment: NETWORK === MAINNET_NETWORK ? 'MAINNET' : 'TESTNET',
+    network: NETWORK,
     x402: {
+      version: 'v2',
       enabled: true,
-      facilitator: 'Coinbase CDP',
-      authentication: 'ECDSA API Keys'
+      facilitator: FACILITATOR_URL
     },
-    wallet: MAINNET_CONFIG.walletAddress,
+    wallet: WALLET_ADDRESS,
     price: '0.03 USDC per query',
     paymentsReceived: paymentLog.length
+  });
+});
+
+// Info endpoint (free)
+app.get('/', (req, res) => {
+  res.json({
+    name: 'CryptoSentiment API',
+    version: '2.0.0',
+    description: 'AI-powered cryptocurrency sentiment analysis',
+    x402: {
+      version: 'v2',
+      enabled: true,
+      price: '$0.03 per query'
+    },
+    endpoints: {
+      'GET /v1/sentiment/:coin': {
+        description: 'Get sentiment analysis for a cryptocurrency',
+        price: '$0.03 USDC',
+        example: '/v1/sentiment/BTC',
+        protected: true
+      },
+      'GET /health': {
+        description: 'Health check',
+        protected: false
+      }
+    }
   });
 });
 
@@ -185,31 +232,22 @@ app.get('/admin/payments', (req, res) => {
   });
 });
 
-// Initialize and start
+// Start server
 console.log('\n======================================================================');
-console.log('🚀 CryptoSentiment API - MAINNET PRODUCTION');
+console.log('🚀 CryptoSentiment API - x402 v2');
 console.log('======================================================================');
 console.log(`📡 Server: http://localhost:${PORT}`);
-console.log('🌐 Environment: MAINNET (Base Mainnet)');
-console.log('💰 x402 SDK: Official v2.0 with CDP facilitator');
-console.log('🔗 Facilitator: https://api.cdp.coinbase.com/platform/v2/x402');
-console.log('💵 Accepting REAL USDC payments on Base Mainnet');
+console.log(`🌐 Network: ${NETWORK}`);
+console.log(`💰 x402 SDK: v2 (Official)`);
+console.log(`🔗 Facilitator: ${FACILITATOR_URL}`);
 console.log(`📊 Payments processed: ${paymentLog.length}`);
 console.log('\n⚙️  Configuration:');
-console.log(`   Network: ${MAINNET_CONFIG.network}`);
-console.log(`   USDC Contract: ${MAINNET_CONFIG.usdcContract}`);
-console.log(`   Wallet: ${MAINNET_CONFIG.walletAddress}`);
+console.log(`   Network: ${NETWORK}`);
+console.log(`   Wallet: ${WALLET_ADDRESS}`);
 console.log(`   Price: $0.03 USDC per query`);
-console.log('   Authentication: CDP API Keys (ECDSA) ✅');
-console.log('\n✅ READY FOR MAINNET PAYMENTS!');
-console.log('   Real USDC on Base Mainnet');
-console.log('   CDP facilitator authenticated');
-console.log('   All systems operational');
 console.log('======================================================================\n');
-
-await x402Server.initialize();
 
 app.listen(PORT, () => {
   console.log(`✨ Server running on port ${PORT}`);
-  console.log('💰 Ready to accept mainnet USDC payments!\n');
+  console.log('💰 Ready to accept USDC payments!\n');
 });
