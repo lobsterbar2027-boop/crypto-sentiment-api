@@ -4,10 +4,9 @@ import Sentiment from 'sentiment';
 import vaderSentiment from 'vader-sentiment';
 import rateLimit from 'express-rate-limit';
 
-// x402 v2 imports - correct packages
-import { paymentMiddleware, x402ResourceServer } from '@x402/express';
-import { ExactEvmScheme } from '@x402/evm/exact/server';
-import { HTTPFacilitatorClient } from '@x402/core/server';
+// x402 imports - using @coinbase/x402 facilitator for CDP auth
+import { paymentMiddleware } from 'x402-express';
+import { facilitator } from '@coinbase/x402';
 
 const app = express();
 const sentiment = new Sentiment();
@@ -28,30 +27,11 @@ app.use(limiter);
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
 const NEWS_API_KEY = process.env.NEWS_API_KEY || 'demo';
 
-// x402 v2 Configuration using CAIP-2 network identifiers
-const MAINNET_NETWORK = 'eip155:8453'; // Base mainnet
-const TESTNET_NETWORK = 'eip155:84532'; // Base Sepolia (for testing)
+// Network - Base Mainnet
+const NETWORK = 'base';
 
-// Use mainnet or testnet based on environment
-const NETWORK = process.env.USE_TESTNET === 'true' ? TESTNET_NETWORK : MAINNET_NETWORK;
-const FACILITATOR_URL = process.env.USE_TESTNET === 'true' 
-  ? 'https://x402.org/facilitator'  // Testnet facilitator
-  : 'https://api.cdp.coinbase.com/platform/v2/x402'; // CDP mainnet facilitator
-
-console.log('🔄 Initializing x402 v2...');
-
-// Create facilitator client
-const facilitatorClient = new HTTPFacilitatorClient({
-  url: FACILITATOR_URL,
-  // CDP facilitator may require additional auth headers in production
-  // headers: { 'Authorization': `Bearer ${process.env.CDP_API_KEY}` }
-});
-
-// Create x402 resource server and register EVM scheme for the network
-const server = new x402ResourceServer(facilitatorClient)
-  .register(NETWORK, new ExactEvmScheme());
-
-console.log('✅ x402 v2 configured');
+console.log('🔄 Initializing x402 with CDP facilitator...');
+console.log('✅ CDP API Key ID:', process.env.CDP_API_KEY_ID?.substring(0, 8) + '...');
 
 // Payment tracking
 const paymentLog = [];
@@ -94,25 +74,22 @@ async function fetchCryptoNews(symbol) {
   }
 }
 
-// x402 Payment Middleware - protects the sentiment endpoint
+// x402 Payment Middleware with CDP facilitator
+// The @coinbase/x402 facilitator automatically uses CDP_API_KEY_ID and CDP_API_KEY_SECRET from env
 app.use(
   paymentMiddleware(
+    WALLET_ADDRESS,
     {
       'GET /v1/sentiment/:coin': {
-        accepts: [
-          {
-            scheme: 'exact',
-            price: '$0.03', // $0.03 USDC per query
-            network: NETWORK,
-            payTo: WALLET_ADDRESS,
-          },
-        ],
-        description: 'Get AI-powered sentiment analysis for any cryptocurrency based on recent news',
-        mimeType: 'application/json',
+        price: '$0.03',
+        network: NETWORK,
+        config: {
+          description: 'Get AI-powered sentiment analysis for any cryptocurrency',
+        },
       },
     },
-    server,
-  ),
+    facilitator
+  )
 );
 
 // Protected sentiment endpoint
@@ -165,7 +142,7 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
       },
       articles: analyzed,
       payment: {
-        network: NETWORK === MAINNET_NETWORK ? 'Base Mainnet' : 'Base Sepolia',
+        network: 'Base Mainnet',
         amount: '0.03 USDC',
         status: 'confirmed'
       }
@@ -176,16 +153,15 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
   }
 });
 
-// Health check (free endpoint)
+// Health check (free)
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
-    environment: NETWORK === MAINNET_NETWORK ? 'MAINNET' : 'TESTNET',
+    environment: 'MAINNET',
     network: NETWORK,
     x402: {
-      version: 'v2',
       enabled: true,
-      facilitator: FACILITATOR_URL
+      facilitator: 'CDP (@coinbase/x402)'
     },
     wallet: WALLET_ADDRESS,
     price: '0.03 USDC per query',
@@ -199,8 +175,8 @@ app.get('/', (req, res) => {
     name: 'CryptoSentiment API',
     version: '2.0.0',
     description: 'AI-powered cryptocurrency sentiment analysis',
+    network: 'Base Mainnet',
     x402: {
-      version: 'v2',
       enabled: true,
       price: '$0.03 per query'
     },
@@ -219,7 +195,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// Admin endpoint (payment logs)
+// Admin endpoint
 app.get('/admin/payments', (req, res) => {
   const adminKey = req.headers['x-admin-key'];
   if (adminKey !== process.env.ADMIN_KEY) {
@@ -234,20 +210,18 @@ app.get('/admin/payments', (req, res) => {
 
 // Start server
 console.log('\n======================================================================');
-console.log('🚀 CryptoSentiment API - x402 v2');
+console.log('🚀 CryptoSentiment API - MAINNET');
 console.log('======================================================================');
 console.log(`📡 Server: http://localhost:${PORT}`);
-console.log(`🌐 Network: ${NETWORK}`);
-console.log(`💰 x402 SDK: v2 (Official)`);
-console.log(`🔗 Facilitator: ${FACILITATOR_URL}`);
-console.log(`📊 Payments processed: ${paymentLog.length}`);
+console.log(`🌐 Network: ${NETWORK} (Base Mainnet)`);
+console.log(`💰 Facilitator: CDP (@coinbase/x402)`);
+console.log(`💵 Price: $0.03 USDC per query`);
 console.log('\n⚙️  Configuration:');
-console.log(`   Network: ${NETWORK}`);
 console.log(`   Wallet: ${WALLET_ADDRESS}`);
-console.log(`   Price: $0.03 USDC per query`);
+console.log(`   CDP Key: ${process.env.CDP_API_KEY_ID?.substring(0, 8)}...`);
 console.log('======================================================================\n');
 
 app.listen(PORT, () => {
   console.log(`✨ Server running on port ${PORT}`);
-  console.log('💰 Ready to accept USDC payments!\n');
+  console.log('💰 Ready to accept mainnet USDC payments!\n');
 });
