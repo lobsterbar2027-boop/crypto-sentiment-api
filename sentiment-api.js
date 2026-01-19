@@ -5,7 +5,7 @@ import vaderSentiment from 'vader-sentiment';
 import rateLimit from 'express-rate-limit';
 
 // x402 v2 imports - CORRECTED
-import { x402ResourceServer } from '@x402/express';
+import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { HTTPFacilitatorClient } from '@x402/core/server';
 
