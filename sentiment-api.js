@@ -4,8 +4,8 @@ import Sentiment from 'sentiment';
 import vaderSentiment from 'vader-sentiment';
 import rateLimit from 'express-rate-limit';
 
-// x402 v2 imports
-import { paymentMiddleware, x402ResourceServer } from '@x402/express';
+// x402 v2 imports - CORRECTED
+import { x402ResourceServer } from '@x402/express';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { HTTPFacilitatorClient } from '@x402/core/server';
 
@@ -167,24 +167,72 @@ async function fetchRedditPosts(coin) {
   return allPosts;
 }
 
-// Define protected routes BEFORE the middleware
-const protectedRoutes = {
-  'GET /v1/sentiment/:coin': {
-    accepts: [
-      {
-        scheme: 'exact',
-        price: '$0.03',
-        network: NETWORK,
-        payTo: WALLET_ADDRESS,
-      },
-    ],
-    description: 'Get AI-powered Reddit sentiment analysis for any cryptocurrency',
-    mimeType: 'application/json',
-  },
-};
+// Health check (free) - MUST be BEFORE payment middleware
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    version: 'v2',
+    environment: 'TESTNET',
+    network: NETWORK,
+    facilitator: FACILITATOR_URL,
+    wallet: WALLET_ADDRESS,
+    price: '0.03 USDC per query',
+    source: 'Reddit',
+    paymentsReceived: paymentLog.length
+  });
+});
 
-// x402 v2 Payment Middleware
-app.use(paymentMiddleware(protectedRoutes, server));
+// Info endpoint (free) - MUST be BEFORE payment middleware
+app.get('/', (req, res) => {
+  res.json({
+    name: 'CryptoSentiment API',
+    version: '2.0.0',
+    description: 'AI-powered Reddit sentiment analysis for cryptocurrencies',
+    environment: 'TESTNET',
+    network: 'Base Sepolia (eip155:84532)',
+    dataSource: 'Reddit (r/bitcoin, r/ethereum, r/CryptoCurrency, etc.)',
+    x402: {
+      version: 'v2',
+      enabled: true,
+      price: '$0.03 per query'
+    },
+    supportedCoins: Object.keys(CRYPTO_SUBREDDITS),
+    endpoints: {
+      'GET /v1/sentiment/:coin': {
+        description: 'Get Reddit sentiment analysis for a cryptocurrency',
+        price: '$0.03 USDC',
+        example: '/v1/sentiment/BTC',
+        protected: true
+      },
+      'GET /health': {
+        description: 'Health check',
+        protected: false
+      }
+    }
+  });
+});
+
+// x402 v2 Payment Middleware - Apply BEFORE protected routes
+// This middleware will intercept ALL requests matching the route patterns
+app.use(
+  paymentMiddleware(
+    {
+      'GET /v1/sentiment/:coin': {
+        accepts: [
+          {
+            scheme: 'exact',
+            price: '$0.03',
+            network: NETWORK,
+            payTo: WALLET_ADDRESS,
+          },
+        ],
+        description: 'Get AI-powered Reddit sentiment analysis for any cryptocurrency',
+        mimeType: 'application/json',
+      },
+    },
+    server
+  )
+);
 
 console.log('✅ Payment middleware applied');
 
@@ -255,51 +303,6 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
     console.error('Sentiment analysis error:', error);
     res.status(500).json({ error: 'Failed to analyze sentiment' });
   }
-});
-
-// Health check (free)
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'healthy',
-    version: 'v2',
-    environment: 'TESTNET',
-    network: NETWORK,
-    facilitator: FACILITATOR_URL,
-    wallet: WALLET_ADDRESS,
-    price: '0.03 USDC per query',
-    source: 'Reddit',
-    paymentsReceived: paymentLog.length
-  });
-});
-
-// Info endpoint (free)
-app.get('/', (req, res) => {
-  res.json({
-    name: 'CryptoSentiment API',
-    version: '2.0.0',
-    description: 'AI-powered Reddit sentiment analysis for cryptocurrencies',
-    environment: 'TESTNET',
-    network: 'Base Sepolia (eip155:84532)',
-    dataSource: 'Reddit (r/bitcoin, r/ethereum, r/CryptoCurrency, etc.)',
-    x402: {
-      version: 'v2',
-      enabled: true,
-      price: '$0.03 per query'
-    },
-    supportedCoins: Object.keys(CRYPTO_SUBREDDITS),
-    endpoints: {
-      'GET /v1/sentiment/:coin': {
-        description: 'Get Reddit sentiment analysis for a cryptocurrency',
-        price: '$0.03 USDC',
-        example: '/v1/sentiment/BTC',
-        protected: true
-      },
-      'GET /health': {
-        description: 'Health check',
-        protected: false
-      }
-    }
-  });
 });
 
 // Admin endpoint
