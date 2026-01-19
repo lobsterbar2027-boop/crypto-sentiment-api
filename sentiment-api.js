@@ -308,8 +308,6 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
         confidence: Math.min(Math.abs(avgScore) * 2, 1),
         postsAnalyzed: overallSentiment.count
       },
-      posts: analyzed,
-      subredditsScanned: [...new Set(analyzed.map(p => p.subreddit))],
       payment: {
         network: 'Base Sepolia (Testnet)',
         amount: '0.03 USDC',
