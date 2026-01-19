@@ -13,6 +13,9 @@ const app = express();
 const sentiment = new Sentiment();
 const PORT = process.env.PORT || 3000;
 
+// Trust proxy (required for Railway/Heroku)
+app.set('trust proxy', 1);
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -20,13 +23,14 @@ app.use(express.json());
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 app.use(limiter);
 
 // Configuration
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
-const NEWS_API_KEY = process.env.NEWS_API_KEY || 'demo';
 
 // TESTNET - Base Sepolia (no auth required)
 const NETWORK = 'eip155:84532';
@@ -35,7 +39,7 @@ const FACILITATOR_URL = 'https://x402.org/facilitator';
 console.log('🔄 Initializing x402 v2 (TESTNET)...');
 console.log('   Wallet:', WALLET_ADDRESS);
 
-// Create facilitator client (testnet - no auth needed)
+// Create facilitator client
 const facilitatorClient = new HTTPFacilitatorClient({
   url: FACILITATOR_URL,
 });
@@ -48,6 +52,21 @@ console.log('✅ x402 v2 configured');
 
 // Payment tracking
 const paymentLog = [];
+
+// Crypto subreddit mapping
+const CRYPTO_SUBREDDITS = {
+  BTC: ['bitcoin', 'Bitcoin'],
+  ETH: ['ethereum', 'ethtrader'],
+  SOL: ['solana'],
+  DOGE: ['dogecoin'],
+  XRP: ['XRP', 'Ripple'],
+  ADA: ['cardano'],
+  MATIC: ['maticnetwork', 'polygonnetwork'],
+  DOT: ['polkadot'],
+  LINK: ['Chainlink'],
+  AVAX: ['Avax'],
+  DEFAULT: ['CryptoCurrency', 'CryptoMarkets']
+};
 
 // Helper: Analyze sentiment
 function analyzeSentiment(text) {
@@ -65,68 +84,133 @@ function analyzeSentiment(text) {
     label,
     confidence: Math.abs(score),
     details: {
-      sentiment: sentimentResult,
-      vader: vaderResult
+      sentiment: sentimentResult.score,
+      vader: vaderResult.compound
     }
   };
 }
 
-// Helper: Fetch crypto news
-async function fetchCryptoNews(symbol) {
-  try {
-    const query = `${symbol} cryptocurrency`;
-    const response = await fetch(
-      `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&pageSize=10&sortBy=publishedAt&apiKey=${NEWS_API_KEY}`
-    );
-    if (!response.ok) return [];
-    const data = await response.json();
-    return data.articles || [];
-  } catch (error) {
-    console.error('News fetch error:', error);
-    return [];
+// Helper: Fetch Reddit posts
+async function fetchRedditPosts(coin) {
+  const subreddits = CRYPTO_SUBREDDITS[coin.toUpperCase()] || CRYPTO_SUBREDDITS.DEFAULT;
+  const allPosts = [];
+
+  for (const subreddit of subreddits) {
+    try {
+      // Fetch hot posts from subreddit
+      const response = await fetch(
+        `https://www.reddit.com/r/${subreddit}/hot.json?limit=10`,
+        {
+          headers: {
+            'User-Agent': 'CryptoSentimentAPI/2.0'
+          }
+        }
+      );
+
+      if (!response.ok) continue;
+
+      const data = await response.json();
+      const posts = data.data?.children || [];
+
+      for (const post of posts) {
+        const p = post.data;
+        allPosts.push({
+          title: p.title,
+          selftext: p.selftext?.substring(0, 500) || '',
+          subreddit: p.subreddit,
+          score: p.score,
+          numComments: p.num_comments,
+          url: `https://reddit.com${p.permalink}`,
+          created: new Date(p.created_utc * 1000).toISOString()
+        });
+      }
+    } catch (error) {
+      console.error(`Reddit fetch error for r/${subreddit}:`, error.message);
+    }
   }
+
+  // Also search for the coin name
+  try {
+    const searchResponse = await fetch(
+      `https://www.reddit.com/search.json?q=${coin}+cryptocurrency&sort=hot&limit=10`,
+      {
+        headers: {
+          'User-Agent': 'CryptoSentimentAPI/2.0'
+        }
+      }
+    );
+
+    if (searchResponse.ok) {
+      const searchData = await searchResponse.json();
+      const searchPosts = searchData.data?.children || [];
+
+      for (const post of searchPosts) {
+        const p = post.data;
+        // Avoid duplicates
+        if (!allPosts.find(existing => existing.url === `https://reddit.com${p.permalink}`)) {
+          allPosts.push({
+            title: p.title,
+            selftext: p.selftext?.substring(0, 500) || '',
+            subreddit: p.subreddit,
+            score: p.score,
+            numComments: p.num_comments,
+            url: `https://reddit.com${p.permalink}`,
+            created: new Date(p.created_utc * 1000).toISOString()
+          });
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Reddit search error:', error.message);
+  }
+
+  return allPosts;
 }
 
-// x402 v2 Payment Middleware
-app.use(
-  paymentMiddleware(
-    {
-      'GET /v1/sentiment/:coin': {
-        accepts: [
-          {
-            scheme: 'exact',
-            price: '$0.001',
-            network: NETWORK,
-            payTo: WALLET_ADDRESS,
-          },
-        ],
-        description: 'Get AI-powered sentiment analysis for any cryptocurrency',
-        mimeType: 'application/json',
+// Define protected routes BEFORE the middleware
+const protectedRoutes = {
+  'GET /v1/sentiment/:coin': {
+    accepts: [
+      {
+        scheme: 'exact',
+        price: '$0.03',
+        network: NETWORK,
+        payTo: WALLET_ADDRESS,
       },
-    },
-    server,
-  ),
-);
+    ],
+    description: 'Get AI-powered Reddit sentiment analysis for any cryptocurrency',
+    mimeType: 'application/json',
+  },
+};
+
+// x402 v2 Payment Middleware
+app.use(paymentMiddleware(protectedRoutes, server));
+
+console.log('✅ Payment middleware applied');
 
 // Protected sentiment endpoint
 app.get('/v1/sentiment/:coin', async (req, res) => {
+  console.log(`📊 Processing PAID request for ${req.params.coin}`);
+
   try {
     const coin = req.params.coin.toUpperCase();
-    console.log(`📊 Processing paid request for ${coin}`);
+    const posts = await fetchRedditPosts(coin);
 
-    const articles = await fetchCryptoNews(coin);
+    console.log(`   Found ${posts.length} Reddit posts for ${coin}`);
 
     let overallSentiment = { score: 0, count: 0 };
-    const analyzed = articles.slice(0, 5).map(article => {
-      const text = `${article.title} ${article.description || ''}`;
+    const analyzed = posts.slice(0, 15).map(post => {
+      const text = `${post.title} ${post.selftext}`;
       const result = analyzeSentiment(text);
       overallSentiment.score += result.score;
       overallSentiment.count++;
       return {
-        title: article.title,
-        source: article.source?.name || 'Unknown',
-        url: article.url,
-        publishedAt: article.publishedAt,
+        title: post.title,
+        subreddit: post.subreddit,
+        redditScore: post.score,
+        comments: post.numComments,
+        url: post.url,
+        created: post.created,
         sentiment: result
       };
     });
@@ -143,25 +227,27 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
     // Log payment
     const payment = {
       timestamp: new Date().toISOString(),
-      amount: '0.001',
+      amount: '0.03',
       coin
     };
     paymentLog.push(payment);
-    console.log('💰 PAYMENT RECEIVED:', payment);
+    console.log('💰 PAYMENT CONFIRMED:', payment);
 
     res.json({
       coin,
       timestamp: new Date().toISOString(),
+      source: 'Reddit',
       overall: {
         sentiment: overallLabel,
         score: parseFloat(avgScore.toFixed(4)),
-        confidence: Math.abs(avgScore),
-        articlesAnalyzed: overallSentiment.count
+        confidence: Math.min(Math.abs(avgScore) * 2, 1),
+        postsAnalyzed: overallSentiment.count
       },
-      articles: analyzed,
+      posts: analyzed,
+      subredditsScanned: [...new Set(analyzed.map(p => p.subreddit))],
       payment: {
         network: 'Base Sepolia (Testnet)',
-        amount: '0.001 USDC',
+        amount: '0.03 USDC',
         status: 'confirmed'
       }
     });
@@ -180,7 +266,8 @@ app.get('/health', (req, res) => {
     network: NETWORK,
     facilitator: FACILITATOR_URL,
     wallet: WALLET_ADDRESS,
-    price: '0.001 USDC per query',
+    price: '0.03 USDC per query',
+    source: 'Reddit',
     paymentsReceived: paymentLog.length
   });
 });
@@ -190,18 +277,20 @@ app.get('/', (req, res) => {
   res.json({
     name: 'CryptoSentiment API',
     version: '2.0.0',
-    description: 'AI-powered cryptocurrency sentiment analysis',
+    description: 'AI-powered Reddit sentiment analysis for cryptocurrencies',
     environment: 'TESTNET',
     network: 'Base Sepolia (eip155:84532)',
+    dataSource: 'Reddit (r/bitcoin, r/ethereum, r/CryptoCurrency, etc.)',
     x402: {
       version: 'v2',
       enabled: true,
-      price: '$0.001 per query (testnet)'
+      price: '$0.03 per query'
     },
+    supportedCoins: Object.keys(CRYPTO_SUBREDDITS),
     endpoints: {
       'GET /v1/sentiment/:coin': {
-        description: 'Get sentiment analysis for a cryptocurrency',
-        price: '$0.001 USDC (testnet)',
+        description: 'Get Reddit sentiment analysis for a cryptocurrency',
+        price: '$0.03 USDC',
         example: '/v1/sentiment/BTC',
         protected: true
       },
@@ -221,7 +310,7 @@ app.get('/admin/payments', (req, res) => {
   }
   res.json({
     totalPayments: paymentLog.length,
-    totalRevenue: (paymentLog.length * 0.001).toFixed(4),
+    totalRevenue: (paymentLog.length * 0.03).toFixed(2),
     payments: paymentLog
   });
 });
@@ -233,7 +322,8 @@ console.log('===================================================================
 console.log(`📡 Server: http://localhost:${PORT}`);
 console.log(`🌐 Network: ${NETWORK} (Base Sepolia)`);
 console.log(`🔗 Facilitator: ${FACILITATOR_URL}`);
-console.log(`💵 Price: $0.001 USDC (testnet)`);
+console.log(`📊 Data Source: Reddit`);
+console.log(`💵 Price: $0.03 USDC`);
 console.log('======================================================================\n');
 
 app.listen(PORT, () => {
