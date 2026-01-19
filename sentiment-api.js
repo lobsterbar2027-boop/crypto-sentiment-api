@@ -4,10 +4,10 @@ import Sentiment from 'sentiment';
 import vaderSentiment from 'vader-sentiment';
 import rateLimit from 'express-rate-limit';
 
-// x402 v2 imports - Mainnet configuration
+// x402 v2 imports - Using @coinbase/x402 for CDP facilitator
 import { paymentMiddleware, x402ResourceServer } from '@x402/express';
-import { ExactEvmScheme } from '@x402/evm/exact/server';
-import { HTTPFacilitatorClient } from '@x402/core/server';
+import { registerExactEvmScheme } from '@x402/evm/exact/server';
+import { facilitator } from '@coinbase/x402'; // Pre-configured CDP facilitator
 
 const app = express();
 const sentiment = new Sentiment();
@@ -34,35 +34,31 @@ const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
 const CDP_API_KEY_ID = process.env.CDP_API_KEY_ID;
 const CDP_API_KEY_SECRET = process.env.CDP_API_KEY_SECRET;
 const NETWORK = 'eip155:8453'; // Base Mainnet
-const FACILITATOR_URL = 'https://api.cdp.coinbase.com/platform/v2/x402';
 
 console.log('🔄 Initializing x402 v2 (MAINNET - REAL USDC)...');
 console.log('   Wallet:', WALLET_ADDRESS);
 console.log('   Network:', NETWORK, '(Base Mainnet)');
-console.log('   Facilitator:', FACILITATOR_URL);
+console.log('   Facilitator: Coinbase CDP (@coinbase/x402)');
 
 // Validate environment variables
 if (!WALLET_ADDRESS) {
-  throw new Error('WALLET_ADDRESS environment variable is required');
+  throw new Error('❌ WALLET_ADDRESS environment variable is required');
 }
-if (!CDP_API_KEY_ID || !CDP_API_KEY_SECRET) {
-  throw new Error('CDP API keys are required for mainnet. Set CDP_API_KEY_ID and CDP_API_KEY_SECRET');
+if (!CDP_API_KEY_ID) {
+  throw new Error('❌ CDP_API_KEY_ID environment variable is required. Get it from https://portal.cdp.coinbase.com');
+}
+if (!CDP_API_KEY_SECRET) {
+  throw new Error('❌ CDP_API_KEY_SECRET environment variable is required. Get it from https://portal.cdp.coinbase.com');
 }
 
-// Create CDP facilitator client (MAINNET)
-const facilitatorClient = new HTTPFacilitatorClient({
-  url: FACILITATOR_URL,
-  createAuthHeaders: () => ({
-    'X-CDP-API-KEY-ID': CDP_API_KEY_ID,
-    'X-CDP-API-KEY-SECRET': CDP_API_KEY_SECRET,
-  }),
-});
+console.log('   ✅ CDP credentials validated');
 
-// Create resource server and register EVM scheme for Base Mainnet
-const server = new x402ResourceServer(facilitatorClient)
-  .register(NETWORK, new ExactEvmScheme());
+// Create resource server using CDP facilitator
+// The @coinbase/x402 package automatically uses CDP_API_KEY_ID and CDP_API_KEY_SECRET
+const server = new x402ResourceServer(facilitator);
+registerExactEvmScheme(server);
 
-console.log('✅ x402 v2 configured for MAINNET');
+console.log('✅ x402 v2 configured for MAINNET with CDP facilitator');
 
 // Payment tracking
 const paymentLog = [];
@@ -133,7 +129,7 @@ async function fetchRedditPosts(coin) {
         });
       }
     } catch (error) {
-      console.error(`Reddit error for r/${subreddit}:`, error.message);
+      // Silent fail, keep collecting from other subreddits
     }
   }
 
@@ -171,7 +167,7 @@ async function fetchRedditPosts(coin) {
       }
     }
   } catch (error) {
-    console.error('Reddit search error:', error.message);
+    // Silent fail
   }
 
   return allPosts;
@@ -184,7 +180,7 @@ app.get('/health', (req, res) => {
     version: '2.0-mainnet',
     environment: 'PRODUCTION',
     network: 'Base Mainnet (eip155:8453)',
-    facilitator: 'CDP',
+    facilitator: 'Coinbase CDP',
     wallet: WALLET_ADDRESS,
     price: '0.03 USDC per query',
     source: 'Reddit',
@@ -225,11 +221,9 @@ app.get('/', (req, res) => {
   });
 });
 
-// x402 Payment Middleware - MAINNET
+// x402 Payment Middleware - MAINNET with CDP facilitator
 console.log('🔧 Applying MAINNET payment middleware...');
 console.log('   ⚠️  WARNING: This charges REAL USDC on Base Mainnet');
-console.log('   Route pattern: GET /v1/sentiment/:coin');
-console.log('   Price: $0.03 USDC');
 
 app.use(
   paymentMiddleware(
@@ -256,9 +250,7 @@ console.log('✅ Payment middleware applied (MAINNET)');
 // PROTECTED ROUTE
 app.get('/v1/sentiment/:coin', async (req, res) => {
   const hasPayment = !!req.headers['payment-signature'];
-  
-  console.log(`💰 PAID request for ${req.params.coin}`);
-  console.log(`   Payment verified: ${hasPayment ? 'YES' : 'NO (middleware should have blocked this!)'}`);
+  console.log(`💰 PAID request for ${req.params.coin} (payment verified: ${hasPayment})`);
 
   try {
     const coin = req.params.coin.toUpperCase();
@@ -283,16 +275,12 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
     else overallLabel = 'neutral';
 
     // Log payment
-    const payment = {
+    paymentLog.push({
       timestamp: new Date().toISOString(),
       amount: 0.03,
       coin,
-      network: 'Base Mainnet',
-      verified: hasPayment
-    };
-    paymentLog.push(payment);
-
-    console.log(`✅ Payment logged: $${payment.amount} USDC`);
+      network: 'Base Mainnet'
+    });
 
     res.json({
       coin,
