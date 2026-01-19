@@ -6,7 +6,7 @@ import rateLimit from 'express-rate-limit';
 
 // x402 v2 imports - CORRECTED
 import { paymentMiddleware, x402ResourceServer } from '@x402/express';
-import { ExactEvmScheme } from '@x402/evm/exact/server';
+import { registerExactEvmScheme } from '@x402/evm/exact/server';
 import { HTTPFacilitatorClient } from '@x402/core/server';
 
 const app = express();
@@ -44,9 +44,9 @@ const facilitatorClient = new HTTPFacilitatorClient({
   url: FACILITATOR_URL,
 });
 
-// Create resource server and register EVM scheme
-const server = new x402ResourceServer(facilitatorClient)
-  .register(NETWORK, new ExactEvmScheme());
+// Create resource server and register EVM scheme - CORRECTED
+const server = new x402ResourceServer(facilitatorClient);
+registerExactEvmScheme(server);
 
 console.log('✅ x402 v2 configured');
 
@@ -90,30 +90,40 @@ function analyzeSentiment(text) {
   };
 }
 
-// Helper: Fetch Reddit posts
+// Helper: Fetch Reddit posts with better error handling
 async function fetchRedditPosts(coin) {
   const subreddits = CRYPTO_SUBREDDITS[coin.toUpperCase()] || CRYPTO_SUBREDDITS.DEFAULT;
   const allPosts = [];
+  let errorCount = 0;
 
   for (const subreddit of subreddits) {
     try {
-      // Fetch hot posts from subreddit
       const response = await fetch(
-        `https://www.reddit.com/r/${subreddit}/hot.json?limit=10`,
+        `https://www.reddit.com/r/${subreddit}/hot.json?limit=15`,
         {
           headers: {
-            'User-Agent': 'CryptoSentimentAPI/2.0'
-          }
+            'User-Agent': 'Mozilla/5.0 (compatible; CryptoSentimentBot/2.0)',
+            'Accept': 'application/json'
+          },
+          timeout: 5000
         }
       );
 
-      if (!response.ok) continue;
+      if (!response.ok) {
+        console.error(`Reddit API error for r/${subreddit}: ${response.status} ${response.statusText}`);
+        errorCount++;
+        continue;
+      }
 
       const data = await response.json();
       const posts = data.data?.children || [];
 
+      console.log(`   ✓ Fetched ${posts.length} posts from r/${subreddit}`);
+
       for (const post of posts) {
         const p = post.data;
+        if (p.over_18 || p.removed_by_category || p.stickied) continue; // Skip NSFW, removed, and stickied posts
+        
         allPosts.push({
           title: p.title,
           selftext: p.selftext?.substring(0, 500) || '',
@@ -126,26 +136,33 @@ async function fetchRedditPosts(coin) {
       }
     } catch (error) {
       console.error(`Reddit fetch error for r/${subreddit}:`, error.message);
+      errorCount++;
     }
   }
 
   // Also search for the coin name
   try {
     const searchResponse = await fetch(
-      `https://www.reddit.com/search.json?q=${coin}+cryptocurrency&sort=hot&limit=10`,
+      `https://www.reddit.com/search.json?q=${coin}+crypto&sort=hot&limit=15&t=day`,
       {
         headers: {
-          'User-Agent': 'CryptoSentimentAPI/2.0'
-        }
+          'User-Agent': 'Mozilla/5.0 (compatible; CryptoSentimentBot/2.0)',
+          'Accept': 'application/json'
+        },
+        timeout: 5000
       }
     );
 
     if (searchResponse.ok) {
       const searchData = await searchResponse.json();
       const searchPosts = searchData.data?.children || [];
+      
+      console.log(`   ✓ Fetched ${searchPosts.length} posts from search`);
 
       for (const post of searchPosts) {
         const p = post.data;
+        if (p.over_18 || p.removed_by_category || p.stickied) continue;
+        
         // Avoid duplicates
         if (!allPosts.find(existing => existing.url === `https://reddit.com${p.permalink}`)) {
           allPosts.push({
@@ -162,8 +179,10 @@ async function fetchRedditPosts(coin) {
     }
   } catch (error) {
     console.error('Reddit search error:', error.message);
+    errorCount++;
   }
 
+  console.log(`   📊 Total posts collected: ${allPosts.length} (${errorCount} errors)`);
   return allPosts;
 }
 
@@ -213,7 +232,7 @@ app.get('/', (req, res) => {
 });
 
 // x402 v2 Payment Middleware - Apply BEFORE protected routes
-// This middleware will intercept ALL requests matching the route patterns
+console.log('🔧 Applying payment middleware...');
 app.use(
   paymentMiddleware(
     {
@@ -243,8 +262,6 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
   try {
     const coin = req.params.coin.toUpperCase();
     const posts = await fetchRedditPosts(coin);
-
-    console.log(`   Found ${posts.length} Reddit posts for ${coin}`);
 
     let overallSentiment = { score: 0, count: 0 };
     const analyzed = posts.slice(0, 15).map(post => {
