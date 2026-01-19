@@ -4,9 +4,9 @@ import Sentiment from 'sentiment';
 import vaderSentiment from 'vader-sentiment';
 import rateLimit from 'express-rate-limit';
 
-// x402 v2 imports - CORRECTED
+// x402 v2 imports - EXACTLY as Coinbase docs show
 import { paymentMiddleware, x402ResourceServer } from '@x402/express';
-import { registerExactEvmScheme } from '@x402/evm/exact/server';
+import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { HTTPFacilitatorClient } from '@x402/core/server';
 
 const app = express();
@@ -31,22 +31,20 @@ app.use(limiter);
 
 // Configuration
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
-
-// TESTNET - Base Sepolia (no auth required)
-const NETWORK = 'eip155:84532';
+const NETWORK = 'eip155:84532'; // Base Sepolia
 const FACILITATOR_URL = 'https://x402.org/facilitator';
 
 console.log('🔄 Initializing x402 v2 (TESTNET)...');
 console.log('   Wallet:', WALLET_ADDRESS);
 
-// Create facilitator client
+// Create facilitator client (testnet) - EXACTLY as docs show
 const facilitatorClient = new HTTPFacilitatorClient({
-  url: FACILITATOR_URL,
+  url: FACILITATOR_URL
 });
 
-// Create resource server and register EVM scheme - CORRECTED
-const server = new x402ResourceServer(facilitatorClient);
-registerExactEvmScheme(server);
+// Create resource server and register EVM scheme - EXACTLY as docs show
+const server = new x402ResourceServer(facilitatorClient)
+  .register(NETWORK, new ExactEvmScheme());
 
 console.log('✅ x402 v2 configured');
 
@@ -90,7 +88,7 @@ function analyzeSentiment(text) {
   };
 }
 
-// Helper: Fetch Reddit posts with better error handling
+// Helper: Fetch Reddit posts
 async function fetchRedditPosts(coin) {
   const subreddits = CRYPTO_SUBREDDITS[coin.toUpperCase()] || CRYPTO_SUBREDDITS.DEFAULT;
   const allPosts = [];
@@ -110,7 +108,7 @@ async function fetchRedditPosts(coin) {
       );
 
       if (!response.ok) {
-        console.error(`Reddit API error for r/${subreddit}: ${response.status} ${response.statusText}`);
+        console.error(`Reddit API error for r/${subreddit}: ${response.status}`);
         errorCount++;
         continue;
       }
@@ -122,7 +120,7 @@ async function fetchRedditPosts(coin) {
 
       for (const post of posts) {
         const p = post.data;
-        if (p.over_18 || p.removed_by_category || p.stickied) continue; // Skip NSFW, removed, and stickied posts
+        if (p.over_18 || p.removed_by_category || p.stickied) continue;
         
         allPosts.push({
           title: p.title,
@@ -163,7 +161,6 @@ async function fetchRedditPosts(coin) {
         const p = post.data;
         if (p.over_18 || p.removed_by_category || p.stickied) continue;
         
-        // Avoid duplicates
         if (!allPosts.find(existing => existing.url === `https://reddit.com${p.permalink}`)) {
           allPosts.push({
             title: p.title,
@@ -186,7 +183,7 @@ async function fetchRedditPosts(coin) {
   return allPosts;
 }
 
-// Health check (free) - MUST be BEFORE payment middleware
+// FREE ROUTES - Define BEFORE payment middleware
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
@@ -201,7 +198,6 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Info endpoint (free) - MUST be BEFORE payment middleware
 app.get('/', (req, res) => {
   res.json({
     name: 'CryptoSentiment API',
@@ -231,8 +227,13 @@ app.get('/', (req, res) => {
   });
 });
 
-// x402 v2 Payment Middleware - Apply BEFORE protected routes
+// x402 Payment Middleware - EXACTLY as Coinbase docs show
 console.log('🔧 Applying payment middleware...');
+console.log('   Route pattern:', 'GET /v1/sentiment/:coin');
+console.log('   Price:', '$0.03');
+console.log('   Network:', NETWORK);
+console.log('   PayTo:', WALLET_ADDRESS);
+
 app.use(
   paymentMiddleware(
     {
@@ -249,15 +250,23 @@ app.use(
         mimeType: 'application/json',
       },
     },
-    server
-  )
+    server,
+  ),
 );
 
 console.log('✅ Payment middleware applied');
+console.log('   ⚠️  Requests to /v1/sentiment/* should now require payment');
+console.log('   ⚠️  If you see data without a 402 error, the middleware is NOT working\n');
 
-// Protected sentiment endpoint
+// PROTECTED ROUTE - Define AFTER payment middleware
 app.get('/v1/sentiment/:coin', async (req, res) => {
-  console.log(`📊 Processing PAID request for ${req.params.coin}`);
+  // If we reach here, payment SHOULD have been verified by middleware
+  // But let's add logging to confirm
+  console.log(`📊 Processing request for ${req.params.coin}`);
+  console.log(`   🔍 Payment headers:`, {
+    paymentSignature: req.headers['payment-signature'] ? 'Present' : 'Missing',
+    paymentRequired: req.headers['payment-required'] ? 'Present' : 'Missing'
+  });
 
   try {
     const coin = req.params.coin.toUpperCase();
@@ -289,14 +298,15 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
     else if (avgScore < -0.2) overallLabel = 'bearish';
     else overallLabel = 'neutral';
 
-    // Log payment
-    const payment = {
+    // Log to payment tracking
+    paymentLog.push({
       timestamp: new Date().toISOString(),
       amount: '0.03',
-      coin
-    };
-    paymentLog.push(payment);
-    console.log('💰 PAYMENT CONFIRMED:', payment);
+      coin,
+      hadPaymentSignature: !!req.headers['payment-signature']
+    });
+
+    console.log('✅ Request processed successfully');
 
     res.json({
       coin,
