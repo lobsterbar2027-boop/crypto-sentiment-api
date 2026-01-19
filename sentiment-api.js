@@ -8,7 +8,6 @@ import rateLimit from 'express-rate-limit';
 import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { HTTPFacilitatorClient } from '@x402/core/server';
-import { createFacilitatorConfig } from '@coinbase/x402';
 
 const app = express();
 const sentiment = new Sentiment();
@@ -28,26 +27,20 @@ app.use(limiter);
 // Configuration
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
 const NEWS_API_KEY = process.env.NEWS_API_KEY || 'demo';
-const CDP_API_KEY_ID = process.env.CDP_API_KEY_ID;
-const CDP_API_KEY_SECRET = process.env.CDP_API_KEY_SECRET;
 
-// Network - Base Mainnet (CAIP-2 format)
-const NETWORK = 'eip155:8453';
+// TESTNET - Base Sepolia (no auth required)
+const NETWORK = 'eip155:84532';
+const FACILITATOR_URL = 'https://x402.org/facilitator';
 
-console.log('🔄 Initializing x402 v2...');
-console.log('   CDP Key ID:', CDP_API_KEY_ID?.substring(0, 8) + '...');
+console.log('🔄 Initializing x402 v2 (TESTNET)...');
 console.log('   Wallet:', WALLET_ADDRESS);
 
-// Create CDP facilitator config with auth
-const facilitatorConfig = createFacilitatorConfig(CDP_API_KEY_ID, CDP_API_KEY_SECRET);
-
-// Create facilitator client
+// Create facilitator client (testnet - no auth needed)
 const facilitatorClient = new HTTPFacilitatorClient({
-  url: facilitatorConfig.url,
-  createAuthHeaders: facilitatorConfig.createAuthHeaders,
+  url: FACILITATOR_URL,
 });
 
-// Create resource server and register EVM scheme for Base mainnet
+// Create resource server and register EVM scheme
 const server = new x402ResourceServer(facilitatorClient)
   .register(NETWORK, new ExactEvmScheme());
 
@@ -102,7 +95,7 @@ app.use(
         accepts: [
           {
             scheme: 'exact',
-            price: '$0.03',
+            price: '$0.001',
             network: NETWORK,
             payTo: WALLET_ADDRESS,
           },
@@ -150,7 +143,7 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
     // Log payment
     const payment = {
       timestamp: new Date().toISOString(),
-      amount: '0.03',
+      amount: '0.001',
       coin
     };
     paymentLog.push(payment);
@@ -167,8 +160,8 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
       },
       articles: analyzed,
       payment: {
-        network: 'Base Mainnet',
-        amount: '0.03 USDC',
+        network: 'Base Sepolia (Testnet)',
+        amount: '0.001 USDC',
         status: 'confirmed'
       }
     });
@@ -183,14 +176,11 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
     version: 'v2',
+    environment: 'TESTNET',
     network: NETWORK,
-    x402: {
-      version: 'v2',
-      enabled: true,
-      facilitator: 'CDP'
-    },
+    facilitator: FACILITATOR_URL,
     wallet: WALLET_ADDRESS,
-    price: '0.03 USDC per query',
+    price: '0.001 USDC per query',
     paymentsReceived: paymentLog.length
   });
 });
@@ -201,16 +191,17 @@ app.get('/', (req, res) => {
     name: 'CryptoSentiment API',
     version: '2.0.0',
     description: 'AI-powered cryptocurrency sentiment analysis',
-    network: 'Base Mainnet (eip155:8453)',
+    environment: 'TESTNET',
+    network: 'Base Sepolia (eip155:84532)',
     x402: {
       version: 'v2',
       enabled: true,
-      price: '$0.03 per query'
+      price: '$0.001 per query (testnet)'
     },
     endpoints: {
       'GET /v1/sentiment/:coin': {
         description: 'Get sentiment analysis for a cryptocurrency',
-        price: '$0.03 USDC',
+        price: '$0.001 USDC (testnet)',
         example: '/v1/sentiment/BTC',
         protected: true
       },
@@ -230,18 +221,19 @@ app.get('/admin/payments', (req, res) => {
   }
   res.json({
     totalPayments: paymentLog.length,
-    totalRevenue: (paymentLog.length * 0.03).toFixed(2),
+    totalRevenue: (paymentLog.length * 0.001).toFixed(4),
     payments: paymentLog
   });
 });
 
 // Start server
 console.log('\n======================================================================');
-console.log('🚀 CryptoSentiment API - x402 v2 MAINNET');
+console.log('🚀 CryptoSentiment API - x402 v2 TESTNET');
 console.log('======================================================================');
 console.log(`📡 Server: http://localhost:${PORT}`);
-console.log(`🌐 Network: ${NETWORK}`);
-console.log(`💵 Price: $0.03 USDC per query`);
+console.log(`🌐 Network: ${NETWORK} (Base Sepolia)`);
+console.log(`🔗 Facilitator: ${FACILITATOR_URL}`);
+console.log(`💵 Price: $0.001 USDC (testnet)`);
 console.log('======================================================================\n');
 
 app.listen(PORT, () => {
