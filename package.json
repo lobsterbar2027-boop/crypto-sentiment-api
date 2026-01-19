@@ -1,12 +1,11 @@
 {
   "name": "crypto-sentiment-api",
   "version": "2.0.0",
-  "description": "AI-powered cryptocurrency sentiment analysis with x402 payments",
+  "description": "AI-powered cryptocurrency sentiment analysis with x402 v2 payments",
   "type": "module",
   "main": "sentiment-api.js",
   "scripts": {
-    "start": "node sentiment-api.js",
-    "dev": "node --watch sentiment-api.js"
+    "start": "node sentiment-api.js"
   },
   "dependencies": {
     "express": "^4.18.2",
@@ -14,7 +13,9 @@
     "sentiment": "^5.0.2",
     "vader-sentiment": "^1.1.3",
     "express-rate-limit": "^7.1.5",
-    "x402-express": "^0.7.3",
+    "@x402/express": "^2.1.0",
+    "@x402/evm": "^2.1.0",
+    "@x402/core": "^2.1.0",
     "@coinbase/x402": "^2.1.0"
   },
   "engines": {
