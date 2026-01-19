@@ -4,7 +4,7 @@ import Sentiment from 'sentiment';
 import vaderSentiment from 'vader-sentiment';
 import rateLimit from 'express-rate-limit';
 
-// x402 v2 imports - EXACTLY as Coinbase docs show
+// x402 v2 imports - Mainnet configuration
 import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { HTTPFacilitatorClient } from '@x402/core/server';
@@ -13,7 +13,7 @@ const app = express();
 const sentiment = new Sentiment();
 const PORT = process.env.PORT || 3000;
 
-// Trust proxy (required for Railway/Heroku)
+// Trust proxy (required for Railway)
 app.set('trust proxy', 1);
 
 // Middleware
@@ -29,24 +29,40 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// Configuration
+// Configuration - MAINNET
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
-const NETWORK = 'eip155:84532'; // Base Sepolia
-const FACILITATOR_URL = 'https://x402.org/facilitator';
+const CDP_API_KEY_ID = process.env.CDP_API_KEY_ID;
+const CDP_API_KEY_SECRET = process.env.CDP_API_KEY_SECRET;
+const NETWORK = 'eip155:8453'; // Base Mainnet
+const FACILITATOR_URL = 'https://api.cdp.coinbase.com/platform/v2/x402';
 
-console.log('🔄 Initializing x402 v2 (TESTNET)...');
+console.log('🔄 Initializing x402 v2 (MAINNET - REAL USDC)...');
 console.log('   Wallet:', WALLET_ADDRESS);
+console.log('   Network:', NETWORK, '(Base Mainnet)');
+console.log('   Facilitator:', FACILITATOR_URL);
 
-// Create facilitator client (testnet) - EXACTLY as docs show
+// Validate environment variables
+if (!WALLET_ADDRESS) {
+  throw new Error('WALLET_ADDRESS environment variable is required');
+}
+if (!CDP_API_KEY_ID || !CDP_API_KEY_SECRET) {
+  throw new Error('CDP API keys are required for mainnet. Set CDP_API_KEY_ID and CDP_API_KEY_SECRET');
+}
+
+// Create CDP facilitator client (MAINNET)
 const facilitatorClient = new HTTPFacilitatorClient({
-  url: FACILITATOR_URL
+  url: FACILITATOR_URL,
+  createAuthHeaders: () => ({
+    'X-CDP-API-KEY-ID': CDP_API_KEY_ID,
+    'X-CDP-API-KEY-SECRET': CDP_API_KEY_SECRET,
+  }),
 });
 
-// Create resource server and register EVM scheme - EXACTLY as docs show
+// Create resource server and register EVM scheme for Base Mainnet
 const server = new x402ResourceServer(facilitatorClient)
   .register(NETWORK, new ExactEvmScheme());
 
-console.log('✅ x402 v2 configured');
+console.log('✅ x402 v2 configured for MAINNET');
 
 // Payment tracking
 const paymentLog = [];
@@ -80,11 +96,7 @@ function analyzeSentiment(text) {
   return {
     score: parseFloat(score.toFixed(4)),
     label,
-    confidence: Math.abs(score),
-    details: {
-      sentiment: sentimentResult.score,
-      vader: vaderResult.compound
-    }
+    confidence: Math.abs(score)
   };
 }
 
@@ -92,7 +104,6 @@ function analyzeSentiment(text) {
 async function fetchRedditPosts(coin) {
   const subreddits = CRYPTO_SUBREDDITS[coin.toUpperCase()] || CRYPTO_SUBREDDITS.DEFAULT;
   const allPosts = [];
-  let errorCount = 0;
 
   for (const subreddit of subreddits) {
     try {
@@ -102,21 +113,14 @@ async function fetchRedditPosts(coin) {
           headers: {
             'User-Agent': 'Mozilla/5.0 (compatible; CryptoSentimentBot/2.0)',
             'Accept': 'application/json'
-          },
-          timeout: 5000
+          }
         }
       );
 
-      if (!response.ok) {
-        console.error(`Reddit API error for r/${subreddit}: ${response.status}`);
-        errorCount++;
-        continue;
-      }
+      if (!response.ok) continue;
 
       const data = await response.json();
       const posts = data.data?.children || [];
-
-      console.log(`   ✓ Fetched ${posts.length} posts from r/${subreddit}`);
 
       for (const post of posts) {
         const p = post.data;
@@ -125,20 +129,15 @@ async function fetchRedditPosts(coin) {
         allPosts.push({
           title: p.title,
           selftext: p.selftext?.substring(0, 500) || '',
-          subreddit: p.subreddit,
-          score: p.score,
-          numComments: p.num_comments,
-          url: `https://reddit.com${p.permalink}`,
-          created: new Date(p.created_utc * 1000).toISOString()
+          score: p.score
         });
       }
     } catch (error) {
-      console.error(`Reddit fetch error for r/${subreddit}:`, error.message);
-      errorCount++;
+      console.error(`Reddit error for r/${subreddit}:`, error.message);
     }
   }
 
-  // Also search for the coin name
+  // Also search for the coin
   try {
     const searchResponse = await fetch(
       `https://www.reddit.com/search.json?q=${coin}+crypto&sort=hot&limit=15&t=day`,
@@ -146,70 +145,68 @@ async function fetchRedditPosts(coin) {
         headers: {
           'User-Agent': 'Mozilla/5.0 (compatible; CryptoSentimentBot/2.0)',
           'Accept': 'application/json'
-        },
-        timeout: 5000
+        }
       }
     );
 
     if (searchResponse.ok) {
       const searchData = await searchResponse.json();
       const searchPosts = searchData.data?.children || [];
-      
-      console.log(`   ✓ Fetched ${searchPosts.length} posts from search`);
 
       for (const post of searchPosts) {
         const p = post.data;
         if (p.over_18 || p.removed_by_category || p.stickied) continue;
         
-        if (!allPosts.find(existing => existing.url === `https://reddit.com${p.permalink}`)) {
+        const isDuplicate = allPosts.some(existing => 
+          existing.title === p.title && existing.score === p.score
+        );
+        
+        if (!isDuplicate) {
           allPosts.push({
             title: p.title,
             selftext: p.selftext?.substring(0, 500) || '',
-            subreddit: p.subreddit,
-            score: p.score,
-            numComments: p.num_comments,
-            url: `https://reddit.com${p.permalink}`,
-            created: new Date(p.created_utc * 1000).toISOString()
+            score: p.score
           });
         }
       }
     }
   } catch (error) {
     console.error('Reddit search error:', error.message);
-    errorCount++;
   }
 
-  console.log(`   📊 Total posts collected: ${allPosts.length} (${errorCount} errors)`);
   return allPosts;
 }
 
-// FREE ROUTES - Define BEFORE payment middleware
+// FREE ROUTES - Before payment middleware
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
-    version: 'v2',
-    environment: 'TESTNET',
-    network: NETWORK,
-    facilitator: FACILITATOR_URL,
+    version: '2.0-mainnet',
+    environment: 'PRODUCTION',
+    network: 'Base Mainnet (eip155:8453)',
+    facilitator: 'CDP',
     wallet: WALLET_ADDRESS,
     price: '0.03 USDC per query',
     source: 'Reddit',
-    paymentsReceived: paymentLog.length
+    paymentsReceived: paymentLog.length,
+    totalRevenue: `$${(paymentLog.length * 0.03).toFixed(2)}`
   });
 });
 
 app.get('/', (req, res) => {
   res.json({
     name: 'CryptoSentiment API',
-    version: '2.0.0',
+    version: '2.0-mainnet',
     description: 'AI-powered Reddit sentiment analysis for cryptocurrencies',
-    environment: 'TESTNET',
-    network: 'Base Sepolia (eip155:84532)',
+    environment: 'PRODUCTION',
+    network: 'Base Mainnet (eip155:8453)',
     dataSource: 'Reddit (r/bitcoin, r/ethereum, r/CryptoCurrency, etc.)',
     x402: {
       version: 'v2',
       enabled: true,
-      price: '$0.03 per query'
+      price: '$0.03 USDC per query',
+      network: 'Base Mainnet',
+      facilitator: 'Coinbase CDP'
     },
     supportedCoins: Object.keys(CRYPTO_SUBREDDITS),
     endpoints: {
@@ -217,7 +214,8 @@ app.get('/', (req, res) => {
         description: 'Get Reddit sentiment analysis for a cryptocurrency',
         price: '$0.03 USDC',
         example: '/v1/sentiment/BTC',
-        protected: true
+        protected: true,
+        paymentRequired: '⚠️ REAL USDC ON BASE MAINNET'
       },
       'GET /health': {
         description: 'Health check',
@@ -227,12 +225,11 @@ app.get('/', (req, res) => {
   });
 });
 
-// x402 Payment Middleware - EXACTLY as Coinbase docs show
-console.log('🔧 Applying payment middleware...');
-console.log('   Route pattern:', 'GET /v1/sentiment/:coin');
-console.log('   Price:', '$0.03');
-console.log('   Network:', NETWORK);
-console.log('   PayTo:', WALLET_ADDRESS);
+// x402 Payment Middleware - MAINNET
+console.log('🔧 Applying MAINNET payment middleware...');
+console.log('   ⚠️  WARNING: This charges REAL USDC on Base Mainnet');
+console.log('   Route pattern: GET /v1/sentiment/:coin');
+console.log('   Price: $0.03 USDC');
 
 app.use(
   paymentMiddleware(
@@ -241,8 +238,8 @@ app.use(
         accepts: [
           {
             scheme: 'exact',
-            price: '$0.03',
-            network: NETWORK,
+            price: '$0.03', // REAL USDC
+            network: NETWORK, // Base Mainnet
             payTo: WALLET_ADDRESS,
           },
         ],
@@ -254,39 +251,26 @@ app.use(
   ),
 );
 
-console.log('✅ Payment middleware applied');
-console.log('   ⚠️  Requests to /v1/sentiment/* should now require payment');
-console.log('   ⚠️  If you see data without a 402 error, the middleware is NOT working\n');
+console.log('✅ Payment middleware applied (MAINNET)');
 
-// PROTECTED ROUTE - Define AFTER payment middleware
+// PROTECTED ROUTE
 app.get('/v1/sentiment/:coin', async (req, res) => {
-  // If we reach here, payment SHOULD have been verified by middleware
-  // But let's add logging to confirm
-  console.log(`📊 Processing request for ${req.params.coin}`);
-  console.log(`   🔍 Payment headers:`, {
-    paymentSignature: req.headers['payment-signature'] ? 'Present' : 'Missing',
-    paymentRequired: req.headers['payment-required'] ? 'Present' : 'Missing'
-  });
+  const hasPayment = !!req.headers['payment-signature'];
+  
+  console.log(`💰 PAID request for ${req.params.coin}`);
+  console.log(`   Payment verified: ${hasPayment ? 'YES' : 'NO (middleware should have blocked this!)'}`);
 
   try {
     const coin = req.params.coin.toUpperCase();
     const posts = await fetchRedditPosts(coin);
 
     let overallSentiment = { score: 0, count: 0 };
-    const analyzed = posts.slice(0, 15).map(post => {
+    
+    posts.slice(0, 15).forEach(post => {
       const text = `${post.title} ${post.selftext}`;
       const result = analyzeSentiment(text);
       overallSentiment.score += result.score;
       overallSentiment.count++;
-      return {
-        title: post.title,
-        subreddit: post.subreddit,
-        redditScore: post.score,
-        comments: post.numComments,
-        url: post.url,
-        created: post.created,
-        sentiment: result
-      };
     });
 
     const avgScore = overallSentiment.count > 0
@@ -298,15 +282,17 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
     else if (avgScore < -0.2) overallLabel = 'bearish';
     else overallLabel = 'neutral';
 
-    // Log to payment tracking
-    paymentLog.push({
+    // Log payment
+    const payment = {
       timestamp: new Date().toISOString(),
-      amount: '0.03',
+      amount: 0.03,
       coin,
-      hadPaymentSignature: !!req.headers['payment-signature']
-    });
+      network: 'Base Mainnet',
+      verified: hasPayment
+    };
+    paymentLog.push(payment);
 
-    console.log('✅ Request processed successfully');
+    console.log(`✅ Payment logged: $${payment.amount} USDC`);
 
     res.json({
       coin,
@@ -319,7 +305,7 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
         postsAnalyzed: overallSentiment.count
       },
       payment: {
-        network: 'Base Sepolia (Testnet)',
+        network: 'Base Mainnet',
         amount: '0.03 USDC',
         status: 'confirmed'
       }
@@ -338,20 +324,23 @@ app.get('/admin/payments', (req, res) => {
   }
   res.json({
     totalPayments: paymentLog.length,
-    totalRevenue: (paymentLog.length * 0.03).toFixed(2),
+    totalRevenue: `$${(paymentLog.length * 0.03).toFixed(2)} USDC`,
     payments: paymentLog
   });
 });
 
 // Start server
 console.log('\n======================================================================');
-console.log('🚀 CryptoSentiment API - x402 v2 TESTNET');
+console.log('🚀 CryptoSentiment API - x402 v2 MAINNET (PRODUCTION)');
 console.log('======================================================================');
 console.log(`📡 Server: http://localhost:${PORT}`);
-console.log(`🌐 Network: ${NETWORK} (Base Sepolia)`);
-console.log(`🔗 Facilitator: ${FACILITATOR_URL}`);
+console.log(`🌐 Network: Base Mainnet (${NETWORK})`);
+console.log(`🔗 Facilitator: Coinbase CDP`);
 console.log(`📊 Data Source: Reddit`);
-console.log(`💵 Price: $0.03 USDC`);
+console.log(`💵 Price: $0.03 USDC (REAL MONEY)`);
+console.log('======================================================================');
+console.log('⚠️  WARNING: This server charges REAL USDC on Base Mainnet');
+console.log('⚠️  Make sure you have USDC in your wallet to test');
 console.log('======================================================================\n');
 
 app.listen(PORT, () => {
