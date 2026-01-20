@@ -68,6 +68,14 @@ const resourceServer = new x402ResourceServer(facilitatorClient)
 
 console.log('✅ x402 v2 configured for MAINNET');
 
+// Paywall UI Configuration
+const paywallConfig = {
+  appName: 'CryptoSentiment API',
+  testnet: false, // MAINNET
+};
+
+console.log('✅ Paywall UI configured');
+
 // Payment tracking
 const paymentLog = [];
 
@@ -252,9 +260,8 @@ app.get('/', (req, res) => {
   });
 });
 
-// x402 Payment Middleware - MAINNET with CDP facilitator
-// Using wildcard pattern instead of :coin parameter
-console.log('🔧 Applying payment middleware for route: GET /v1/sentiment/*');
+// x402 Payment Middleware with Paywall UI
+console.log('🔧 Applying payment middleware with paywall UI...');
 
 app.use(
   paymentMiddleware(
@@ -271,15 +278,15 @@ app.use(
       },
     },
     resourceServer,
+    paywallConfig, // Paywall UI config (third parameter)
   ),
 );
 
-console.log('✅ Payment middleware applied');
+console.log('✅ Payment middleware with paywall applied');
 
 // PROTECTED ROUTE - Only executes after payment is verified
 app.get('/v1/sentiment/:coin', async (req, res) => {
   console.log(`\n📊 Processing request for ${req.params.coin}`);
-  console.log(`   Payment header present: ${!!req.headers['x-payment'] || !!req.headers['payment']}`);
 
   try {
     const coin = req.params.coin.toUpperCase();
@@ -321,7 +328,7 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
       network: NETWORK_NAME
     };
     paymentLog.push(paymentRecord);
-    console.log('💰 Request processed:', paymentRecord);
+    console.log('💰 PAYMENT CONFIRMED:', paymentRecord);
 
     res.json({
       coin,
@@ -369,6 +376,7 @@ console.log(`🌐 Network: ${NETWORK} (${NETWORK_NAME})`);
 console.log(`🔗 Facilitator: Coinbase CDP`);
 console.log(`📊 Data Source: Reddit`);
 console.log(`💵 Price: $0.03 USDC (REAL MONEY)`);
+console.log(`🎨 Paywall UI: Enabled`);
 console.log('======================================================================');
 console.log('⚠️  WARNING: This server charges REAL USDC on Base Mainnet');
 console.log('======================================================================\n');
