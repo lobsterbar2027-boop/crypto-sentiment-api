@@ -253,12 +253,13 @@ app.get('/', (req, res) => {
 });
 
 // x402 Payment Middleware - MAINNET with CDP facilitator
-console.log('🔧 Applying payment middleware...');
+// Using wildcard pattern instead of :coin parameter
+console.log('🔧 Applying payment middleware for route: GET /v1/sentiment/*');
 
 app.use(
   paymentMiddleware(
     {
-      'GET /v1/sentiment/:coin': {
+      'GET /v1/sentiment/*': {
         accepts: {
           scheme: 'exact',
           price: '$0.03',
@@ -277,7 +278,8 @@ console.log('✅ Payment middleware applied');
 
 // PROTECTED ROUTE - Only executes after payment is verified
 app.get('/v1/sentiment/:coin', async (req, res) => {
-  console.log(`\n📊 Processing PAID request for ${req.params.coin}`);
+  console.log(`\n📊 Processing request for ${req.params.coin}`);
+  console.log(`   Payment header present: ${!!req.headers['x-payment'] || !!req.headers['payment']}`);
 
   try {
     const coin = req.params.coin.toUpperCase();
@@ -319,7 +321,7 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
       network: NETWORK_NAME
     };
     paymentLog.push(paymentRecord);
-    console.log('💰 PAYMENT CONFIRMED:', paymentRecord);
+    console.log('💰 Request processed:', paymentRecord);
 
     res.json({
       coin,
@@ -331,7 +333,6 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
         confidence: Math.min(Math.abs(avgScore) * 2, 1),
         postsAnalyzed: overallSentiment.count
       },
-      // Include sample of analyzed posts for debugging
       samplePosts: analyzedPosts.slice(0, 5),
       payment: {
         network: NETWORK_NAME,
