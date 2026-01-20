@@ -1,6 +1,6 @@
 {
   "name": "crypto-sentiment-api",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "AI-powered cryptocurrency sentiment analysis with x402 v2 payments",
   "type": "module",
   "main": "sentiment-api.js",
