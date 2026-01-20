@@ -15,7 +15,8 @@
     "express-rate-limit": "^7.1.5",
     "@x402/express": "^2.1.0",
     "@x402/evm": "^2.1.0",
-    "@x402/core": "^2.1.0"
+    "@x402/core": "^2.1.0",
+    "@coinbase/x402": "^1.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
