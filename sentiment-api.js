@@ -1,3 +1,7 @@
+// CRITICAL: Polyfill for Node.js 18 - must be at the very top
+import { webcrypto } from 'crypto';
+globalThis.crypto = webcrypto;
+
 import express from 'express';
 import cors from 'cors';
 import Sentiment from 'sentiment';
