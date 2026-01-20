@@ -4,10 +4,10 @@ import Sentiment from 'sentiment';
 import vaderSentiment from 'vader-sentiment';
 import rateLimit from 'express-rate-limit';
 
-// x402 v2 imports - Using @coinbase/x402 for CDP facilitator
+// x402 v2 imports - CORRECT PATTERN from official docs
 import { paymentMiddleware, x402ResourceServer } from '@x402/express';
-import { registerExactEvmScheme } from '@x402/evm/exact/server';
-import { facilitator } from '@coinbase/x402'; // Pre-configured CDP facilitator
+import { ExactEvmScheme } from '@x402/evm/exact/server';
+import { HTTPFacilitatorClient } from '@x402/core/server';
 
 const app = express();
 const sentiment = new Sentiment();
@@ -29,36 +29,35 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// Configuration - MAINNET
+// Configuration
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
-const CDP_API_KEY_ID = process.env.CDP_API_KEY_ID;
-const CDP_API_KEY_SECRET = process.env.CDP_API_KEY_SECRET;
-const NETWORK = 'eip155:8453'; // Base Mainnet
 
-console.log('🔄 Initializing x402 v2 (MAINNET - REAL USDC)...');
+// Network configuration - set USE_TESTNET=true for Base Sepolia, false for Base Mainnet
+const USE_TESTNET = process.env.USE_TESTNET === 'true';
+const NETWORK = USE_TESTNET ? 'eip155:84532' : 'eip155:8453';
+const NETWORK_NAME = USE_TESTNET ? 'Base Sepolia (Testnet)' : 'Base Mainnet';
+const FACILITATOR_URL = 'https://facilitator.x402.org';
+
+console.log('🔄 Initializing x402 v2...');
 console.log('   Wallet:', WALLET_ADDRESS);
-console.log('   Network:', NETWORK, '(Base Mainnet)');
-console.log('   Facilitator: Coinbase CDP (@coinbase/x402)');
+console.log('   Network:', NETWORK, `(${NETWORK_NAME})`);
+console.log('   Facilitator:', FACILITATOR_URL);
 
 // Validate environment variables
 if (!WALLET_ADDRESS) {
   throw new Error('❌ WALLET_ADDRESS environment variable is required');
 }
-if (!CDP_API_KEY_ID) {
-  throw new Error('❌ CDP_API_KEY_ID environment variable is required. Get it from https://portal.cdp.coinbase.com');
-}
-if (!CDP_API_KEY_SECRET) {
-  throw new Error('❌ CDP_API_KEY_SECRET environment variable is required. Get it from https://portal.cdp.coinbase.com');
-}
 
-console.log('   ✅ CDP credentials validated');
+// Create facilitator client - using public x402 facilitator (no auth required)
+const facilitatorClient = new HTTPFacilitatorClient({ 
+  url: FACILITATOR_URL 
+});
 
-// Create resource server using CDP facilitator
-// The @coinbase/x402 package automatically uses CDP_API_KEY_ID and CDP_API_KEY_SECRET
-const server = new x402ResourceServer(facilitator);
-registerExactEvmScheme(server);
+// Create resource server and register the EVM scheme
+const resourceServer = new x402ResourceServer(facilitatorClient)
+  .register(NETWORK, new ExactEvmScheme());
 
-console.log('✅ x402 v2 configured for MAINNET with CDP facilitator');
+console.log('✅ x402 v2 configured');
 
 // Payment tracking
 const paymentLog = [];
@@ -177,10 +176,10 @@ async function fetchRedditPosts(coin) {
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
-    version: '2.0-mainnet',
-    environment: 'PRODUCTION',
-    network: 'Base Mainnet (eip155:8453)',
-    facilitator: 'Coinbase CDP',
+    version: '2.1.0',
+    environment: USE_TESTNET ? 'TESTNET' : 'PRODUCTION',
+    network: `${NETWORK_NAME} (${NETWORK})`,
+    facilitator: FACILITATOR_URL,
     wallet: WALLET_ADDRESS,
     price: '0.03 USDC per query',
     source: 'Reddit',
@@ -192,17 +191,17 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     name: 'CryptoSentiment API',
-    version: '2.0-mainnet',
+    version: '2.1.0',
     description: 'AI-powered Reddit sentiment analysis for cryptocurrencies',
-    environment: 'PRODUCTION',
-    network: 'Base Mainnet (eip155:8453)',
+    environment: USE_TESTNET ? 'TESTNET' : 'PRODUCTION',
+    network: `${NETWORK_NAME} (${NETWORK})`,
     dataSource: 'Reddit (r/bitcoin, r/ethereum, r/CryptoCurrency, etc.)',
     x402: {
       version: 'v2',
       enabled: true,
       price: '$0.03 USDC per query',
-      network: 'Base Mainnet',
-      facilitator: 'Coinbase CDP'
+      network: NETWORK_NAME,
+      facilitator: FACILITATOR_URL
     },
     supportedCoins: Object.keys(CRYPTO_SUBREDDITS),
     endpoints: {
@@ -211,7 +210,7 @@ app.get('/', (req, res) => {
         price: '$0.03 USDC',
         example: '/v1/sentiment/BTC',
         protected: true,
-        paymentRequired: '⚠️ REAL USDC ON BASE MAINNET'
+        paymentRequired: USE_TESTNET ? '⚠️ TESTNET USDC' : '⚠️ REAL USDC'
       },
       'GET /health': {
         description: 'Health check',
@@ -221,40 +220,38 @@ app.get('/', (req, res) => {
   });
 });
 
-// x402 Payment Middleware - MAINNET with CDP facilitator
-console.log('🔧 Applying MAINNET payment middleware...');
-console.log('   ⚠️  WARNING: This charges REAL USDC on Base Mainnet');
+// x402 Payment Middleware - Apply BEFORE protected routes
+console.log('🔧 Applying payment middleware...');
 
 app.use(
   paymentMiddleware(
     {
       'GET /v1/sentiment/:coin': {
-        accepts: [
-          {
-            scheme: 'exact',
-            price: '$0.03', // REAL USDC
-            network: NETWORK, // Base Mainnet
-            payTo: WALLET_ADDRESS,
-          },
-        ],
+        accepts: {
+          scheme: 'exact',
+          price: '$0.03',
+          network: NETWORK,
+          payTo: WALLET_ADDRESS,
+        },
         description: 'Get AI-powered Reddit sentiment analysis for any cryptocurrency',
         mimeType: 'application/json',
       },
     },
-    server,
+    resourceServer,
   ),
 );
 
-console.log('✅ Payment middleware applied (MAINNET)');
+console.log('✅ Payment middleware applied');
 
-// PROTECTED ROUTE
+// PROTECTED ROUTE - Only executes after payment is verified
 app.get('/v1/sentiment/:coin', async (req, res) => {
-  const hasPayment = !!req.headers['payment-signature'];
-  console.log(`💰 PAID request for ${req.params.coin} (payment verified: ${hasPayment})`);
+  console.log(`📊 Processing PAID request for ${req.params.coin}`);
 
   try {
     const coin = req.params.coin.toUpperCase();
     const posts = await fetchRedditPosts(coin);
+    
+    console.log(`   Found ${posts.length} Reddit posts for ${coin}`);
 
     let overallSentiment = { score: 0, count: 0 };
     
@@ -275,12 +272,14 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
     else overallLabel = 'neutral';
 
     // Log payment
-    paymentLog.push({
+    const paymentRecord = {
       timestamp: new Date().toISOString(),
-      amount: 0.03,
+      amount: '0.03',
       coin,
-      network: 'Base Mainnet'
-    });
+      network: NETWORK_NAME
+    };
+    paymentLog.push(paymentRecord);
+    console.log('💰 PAYMENT CONFIRMED:', paymentRecord);
 
     res.json({
       coin,
@@ -293,7 +292,7 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
         postsAnalyzed: overallSentiment.count
       },
       payment: {
-        network: 'Base Mainnet',
+        network: NETWORK_NAME,
         amount: '0.03 USDC',
         status: 'confirmed'
       }
@@ -313,23 +312,27 @@ app.get('/admin/payments', (req, res) => {
   res.json({
     totalPayments: paymentLog.length,
     totalRevenue: `$${(paymentLog.length * 0.03).toFixed(2)} USDC`,
+    network: NETWORK_NAME,
     payments: paymentLog
   });
 });
 
 // Start server
 console.log('\n======================================================================');
-console.log('🚀 CryptoSentiment API - x402 v2 MAINNET (PRODUCTION)');
+console.log(`🚀 CryptoSentiment API - x402 v2 ${USE_TESTNET ? 'TESTNET' : 'MAINNET'}`);
 console.log('======================================================================');
 console.log(`📡 Server: http://localhost:${PORT}`);
-console.log(`🌐 Network: Base Mainnet (${NETWORK})`);
-console.log(`🔗 Facilitator: Coinbase CDP`);
+console.log(`🌐 Network: ${NETWORK} (${NETWORK_NAME})`);
+console.log(`🔗 Facilitator: ${FACILITATOR_URL}`);
 console.log(`📊 Data Source: Reddit`);
-console.log(`💵 Price: $0.03 USDC (REAL MONEY)`);
+console.log(`💵 Price: $0.03 USDC`);
 console.log('======================================================================');
-console.log('⚠️  WARNING: This server charges REAL USDC on Base Mainnet');
-console.log('⚠️  Make sure you have USDC in your wallet to test');
-console.log('======================================================================\n');
+if (!USE_TESTNET) {
+  console.log('⚠️  WARNING: This server charges REAL USDC on Base Mainnet');
+  console.log('⚠️  Make sure you have USDC in your wallet to test');
+  console.log('======================================================================');
+}
+console.log('');
 
 app.listen(PORT, () => {
   console.log(`✨ Server running on port ${PORT}`);
