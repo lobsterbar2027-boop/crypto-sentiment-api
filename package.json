@@ -1,7 +1,7 @@
 {
   "name": "crypto-sentiment-api",
-  "version": "2.0-mainnet",
-  "description": "AI-powered cryptocurrency sentiment analysis with x402 v2 payments on Base Mainnet",
+  "version": "2.1.0",
+  "description": "AI-powered cryptocurrency sentiment analysis with x402 v2 payments",
   "type": "module",
   "main": "sentiment-api.js",
   "scripts": {
@@ -13,10 +13,9 @@
     "sentiment": "^5.0.2",
     "vader-sentiment": "^1.1.3",
     "express-rate-limit": "^7.1.5",
-    "@x402/express": "2.1.0",
-    "@x402/evm": "2.1.0",
-    "@x402/core": "2.1.0",
-    "@coinbase/x402": "^1.0.0"
+    "@x402/express": "^2.1.0",
+    "@x402/evm": "^2.1.0",
+    "@x402/core": "^2.1.0"
   },
   "engines": {
     "node": ">=18.0.0"
