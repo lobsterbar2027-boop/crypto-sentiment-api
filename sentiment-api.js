@@ -60,7 +60,6 @@ console.log('   CDP Key ID:', process.env.CDP_API_KEY_ID.substring(0, 20) + '...
 console.log('   Facilitator: Coinbase CDP');
 
 // Create facilitator client using Carson's exact pattern
-// createFacilitatorConfig() reads CDP_API_KEY_ID and CDP_API_KEY_SECRET from env automatically
 const facilitatorClient = new HTTPFacilitatorClient(createFacilitatorConfig());
 
 // Create resource server and register the EVM scheme
@@ -105,27 +104,37 @@ function analyzeSentiment(text) {
   };
 }
 
-// Helper: Fetch Reddit posts
+// Helper: Fetch Reddit posts with better error handling
 async function fetchRedditPosts(coin) {
   const subreddits = CRYPTO_SUBREDDITS[coin.toUpperCase()] || CRYPTO_SUBREDDITS.DEFAULT;
   const allPosts = [];
+  
+  console.log(`🔍 Fetching Reddit posts for ${coin} from subreddits:`, subreddits);
 
   for (const subreddit of subreddits) {
+    const url = `https://www.reddit.com/r/${subreddit}/hot.json?limit=25`;
+    console.log(`   Fetching: ${url}`);
+    
     try {
-      const response = await fetch(
-        `https://www.reddit.com/r/${subreddit}/hot.json?limit=15`,
-        {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; CryptoSentimentBot/2.0)',
-            'Accept': 'application/json'
-          }
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/json',
+          'Accept-Language': 'en-US,en;q=0.9',
         }
-      );
+      });
 
-      if (!response.ok) continue;
+      console.log(`   Response status for r/${subreddit}: ${response.status}`);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.log(`   ❌ Error response: ${errorText.substring(0, 200)}`);
+        continue;
+      }
 
       const data = await response.json();
       const posts = data.data?.children || [];
+      console.log(`   ✅ Got ${posts.length} posts from r/${subreddit}`);
 
       for (const post of posts) {
         const p = post.data;
@@ -134,29 +143,37 @@ async function fetchRedditPosts(coin) {
         allPosts.push({
           title: p.title,
           selftext: p.selftext?.substring(0, 500) || '',
-          score: p.score
+          score: p.score,
+          subreddit: subreddit
         });
       }
     } catch (error) {
-      // Silent fail, keep collecting from other subreddits
+      console.log(`   ❌ Fetch error for r/${subreddit}:`, error.message);
     }
+    
+    // Small delay between requests to avoid rate limiting
+    await new Promise(resolve => setTimeout(resolve, 500));
   }
 
   // Also search for the coin
+  const searchUrl = `https://www.reddit.com/search.json?q=${coin}+cryptocurrency&sort=hot&limit=25&t=week`;
+  console.log(`   Searching: ${searchUrl}`);
+  
   try {
-    const searchResponse = await fetch(
-      `https://www.reddit.com/search.json?q=${coin}+crypto&sort=hot&limit=15&t=day`,
-      {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; CryptoSentimentBot/2.0)',
-          'Accept': 'application/json'
-        }
+    const searchResponse = await fetch(searchUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en;q=0.9',
       }
-    );
+    });
+
+    console.log(`   Search response status: ${searchResponse.status}`);
 
     if (searchResponse.ok) {
       const searchData = await searchResponse.json();
       const searchPosts = searchData.data?.children || [];
+      console.log(`   ✅ Got ${searchPosts.length} posts from search`);
 
       for (const post of searchPosts) {
         const p = post.data;
@@ -170,15 +187,20 @@ async function fetchRedditPosts(coin) {
           allPosts.push({
             title: p.title,
             selftext: p.selftext?.substring(0, 500) || '',
-            score: p.score
+            score: p.score,
+            subreddit: p.subreddit
           });
         }
       }
+    } else {
+      const errorText = await searchResponse.text();
+      console.log(`   ❌ Search error: ${errorText.substring(0, 200)}`);
     }
   } catch (error) {
-    // Silent fail
+    console.log(`   ❌ Search fetch error:`, error.message);
   }
 
+  console.log(`📊 Total posts collected: ${allPosts.length}`);
   return allPosts;
 }
 
@@ -255,21 +277,29 @@ console.log('✅ Payment middleware applied');
 
 // PROTECTED ROUTE - Only executes after payment is verified
 app.get('/v1/sentiment/:coin', async (req, res) => {
-  console.log(`📊 Processing PAID request for ${req.params.coin}`);
+  console.log(`\n📊 Processing PAID request for ${req.params.coin}`);
 
   try {
     const coin = req.params.coin.toUpperCase();
     const posts = await fetchRedditPosts(coin);
     
-    console.log(`   Found ${posts.length} Reddit posts for ${coin}`);
+    console.log(`   Analyzing ${posts.length} posts...`);
 
     let overallSentiment = { score: 0, count: 0 };
+    const analyzedPosts = [];
     
-    posts.slice(0, 15).forEach(post => {
+    posts.slice(0, 20).forEach(post => {
       const text = `${post.title} ${post.selftext}`;
       const result = analyzeSentiment(text);
       overallSentiment.score += result.score;
       overallSentiment.count++;
+      
+      analyzedPosts.push({
+        title: post.title.substring(0, 100),
+        subreddit: post.subreddit,
+        sentiment: result.label,
+        score: result.score
+      });
     });
 
     const avgScore = overallSentiment.count > 0
@@ -301,6 +331,8 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
         confidence: Math.min(Math.abs(avgScore) * 2, 1),
         postsAnalyzed: overallSentiment.count
       },
+      // Include sample of analyzed posts for debugging
+      samplePosts: analyzedPosts.slice(0, 5),
       payment: {
         network: NETWORK_NAME,
         amount: '0.03 USDC',
@@ -309,7 +341,7 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
     });
   } catch (error) {
     console.error('Sentiment analysis error:', error);
-    res.status(500).json({ error: 'Failed to analyze sentiment' });
+    res.status(500).json({ error: 'Failed to analyze sentiment', details: error.message });
   }
 });
 
