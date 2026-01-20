@@ -4,10 +4,10 @@ import Sentiment from 'sentiment';
 import vaderSentiment from 'vader-sentiment';
 import rateLimit from 'express-rate-limit';
 
-// x402 v2 imports - CORRECT PATTERN from official docs
+// x402 v2 imports
 import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
-import { HTTPFacilitatorClient } from '@x402/core/server';
+import { HTTPFacilitatorClient } from '@x402/core/http'; // Note: /http not /server
 
 const app = express();
 const sentiment = new Sentiment();
@@ -31,27 +31,46 @@ app.use(limiter);
 
 // Configuration
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
-
-// Network configuration - set USE_TESTNET=true for Base Sepolia, false for Base Mainnet
 const USE_TESTNET = process.env.USE_TESTNET === 'true';
+
+// Network configuration
 const NETWORK = USE_TESTNET ? 'eip155:84532' : 'eip155:8453';
 const NETWORK_NAME = USE_TESTNET ? 'Base Sepolia (Testnet)' : 'Base Mainnet';
-const FACILITATOR_URL = 'https://facilitator.x402.org';
 
 console.log('🔄 Initializing x402 v2...');
 console.log('   Wallet:', WALLET_ADDRESS);
 console.log('   Network:', NETWORK, `(${NETWORK_NAME})`);
-console.log('   Facilitator:', FACILITATOR_URL);
+console.log('   Mode:', USE_TESTNET ? 'TESTNET' : 'MAINNET');
 
 // Validate environment variables
 if (!WALLET_ADDRESS) {
   throw new Error('❌ WALLET_ADDRESS environment variable is required');
 }
 
-// Create facilitator client - using public x402 facilitator (no auth required)
-const facilitatorClient = new HTTPFacilitatorClient({ 
-  url: FACILITATOR_URL 
-});
+// Create facilitator client based on network
+let facilitatorClient;
+
+if (USE_TESTNET) {
+  // Testnet: Use public facilitator (no auth required)
+  console.log('   Facilitator: https://facilitator.x402.org (public)');
+  
+  // For testnet, we need to import from @x402/core/server
+  const { HTTPFacilitatorClient: TestnetClient } = await import('@x402/core/server');
+  facilitatorClient = new TestnetClient({ 
+    url: 'https://facilitator.x402.org' 
+  });
+} else {
+  // Mainnet: Use CDP facilitator (requires API keys)
+  console.log('   Facilitator: Coinbase CDP');
+  
+  if (!process.env.CDP_API_KEY_ID || !process.env.CDP_API_KEY_SECRET) {
+    throw new Error('❌ CDP_API_KEY_ID and CDP_API_KEY_SECRET are required for mainnet. Get them from https://portal.cdp.coinbase.com');
+  }
+  
+  // Import CDP facilitator config - this reads CDP_API_KEY_ID and CDP_API_KEY_SECRET automatically
+  const { createFacilitatorConfig } = await import('@coinbase/x402');
+  facilitatorClient = new HTTPFacilitatorClient(createFacilitatorConfig());
+}
 
 // Create resource server and register the EVM scheme
 const resourceServer = new x402ResourceServer(facilitatorClient)
@@ -177,9 +196,9 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
     version: '2.1.0',
-    environment: USE_TESTNET ? 'TESTNET' : 'PRODUCTION',
+    environment: USE_TESTNET ? 'TESTNET' : 'MAINNET',
     network: `${NETWORK_NAME} (${NETWORK})`,
-    facilitator: FACILITATOR_URL,
+    facilitator: USE_TESTNET ? 'https://facilitator.x402.org' : 'Coinbase CDP',
     wallet: WALLET_ADDRESS,
     price: '0.03 USDC per query',
     source: 'Reddit',
@@ -193,7 +212,7 @@ app.get('/', (req, res) => {
     name: 'CryptoSentiment API',
     version: '2.1.0',
     description: 'AI-powered Reddit sentiment analysis for cryptocurrencies',
-    environment: USE_TESTNET ? 'TESTNET' : 'PRODUCTION',
+    environment: USE_TESTNET ? 'TESTNET' : 'MAINNET',
     network: `${NETWORK_NAME} (${NETWORK})`,
     dataSource: 'Reddit (r/bitcoin, r/ethereum, r/CryptoCurrency, etc.)',
     x402: {
@@ -201,7 +220,7 @@ app.get('/', (req, res) => {
       enabled: true,
       price: '$0.03 USDC per query',
       network: NETWORK_NAME,
-      facilitator: FACILITATOR_URL
+      facilitator: USE_TESTNET ? 'Public (x402.org)' : 'Coinbase CDP'
     },
     supportedCoins: Object.keys(CRYPTO_SUBREDDITS),
     endpoints: {
@@ -210,7 +229,7 @@ app.get('/', (req, res) => {
         price: '$0.03 USDC',
         example: '/v1/sentiment/BTC',
         protected: true,
-        paymentRequired: USE_TESTNET ? '⚠️ TESTNET USDC' : '⚠️ REAL USDC'
+        paymentRequired: USE_TESTNET ? '⚠️ TESTNET USDC (Base Sepolia)' : '⚠️ REAL USDC (Base Mainnet)'
       },
       'GET /health': {
         description: 'Health check',
@@ -323,16 +342,18 @@ console.log(`🚀 CryptoSentiment API - x402 v2 ${USE_TESTNET ? 'TESTNET' : 'MAI
 console.log('======================================================================');
 console.log(`📡 Server: http://localhost:${PORT}`);
 console.log(`🌐 Network: ${NETWORK} (${NETWORK_NAME})`);
-console.log(`🔗 Facilitator: ${FACILITATOR_URL}`);
+console.log(`🔗 Facilitator: ${USE_TESTNET ? 'https://facilitator.x402.org' : 'Coinbase CDP'}`);
 console.log(`📊 Data Source: Reddit`);
 console.log(`💵 Price: $0.03 USDC`);
 console.log('======================================================================');
-if (!USE_TESTNET) {
+if (USE_TESTNET) {
+  console.log('ℹ️  Running on TESTNET (Base Sepolia)');
+  console.log('ℹ️  Get testnet USDC from: https://faucet.circle.com');
+} else {
   console.log('⚠️  WARNING: This server charges REAL USDC on Base Mainnet');
   console.log('⚠️  Make sure you have USDC in your wallet to test');
-  console.log('======================================================================');
 }
-console.log('');
+console.log('======================================================================\n');
 
 app.listen(PORT, () => {
   console.log(`✨ Server running on port ${PORT}`);
