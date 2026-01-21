@@ -42,6 +42,8 @@ const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 console.log('🔄 Initializing x402 v2 (MAINNET)...');
 console.log('   Wallet:', evmAddress);
 console.log('   Network:', NETWORK);
+console.log('   CDP_API_KEY_ID:', process.env.CDP_API_KEY_ID ? '✅ Set' : '❌ Missing');
+console.log('   CDP_API_KEY_SECRET:', process.env.CDP_API_KEY_SECRET ? '✅ Set (' + process.env.CDP_API_KEY_SECRET.substring(0, 20) + '...)' : '❌ Missing');
 
 if (!evmAddress) {
   console.error('❌ WALLET_ADDRESS environment variable is required');
@@ -57,8 +59,11 @@ if (!process.env.CDP_API_KEY_SECRET) {
 }
 
 // Create facilitator client using CDP config
-const facilitatorClient = new HTTPFacilitatorClient(createFacilitatorConfig());
+console.log('🔧 Creating facilitator config...');
+const facilitatorConfig = createFacilitatorConfig();
+console.log('   Facilitator config:', JSON.stringify(facilitatorConfig, null, 2));
 
+const facilitatorClient = new HTTPFacilitatorClient(facilitatorConfig);
 console.log('✅ Facilitator client configured');
 
 const paymentLog = [];
@@ -111,6 +116,37 @@ async function fetchRedditPosts(coin) {
 
   return allPosts;
 }
+
+// ============================================
+// DEBUG LOGGING MIDDLEWARE - Add before payment middleware
+// ============================================
+app.use('/v1/sentiment', (req, res, next) => {
+  console.log('\n========== INCOMING REQUEST ==========');
+  console.log('🔍 Method:', req.method);
+  console.log('🔍 URL:', req.url);
+  console.log('🔍 Path:', req.path);
+  console.log('🔍 Headers:');
+  
+  // Log all payment-related headers
+  const paymentHeaders = ['x-payment', 'payment-signature', 'payment', 'authorization'];
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (paymentHeaders.some(h => key.toLowerCase().includes(h))) {
+      console.log(`   💳 ${key}: ${value ? value.substring(0, 100) + '...' : 'null'}`);
+      
+      // Try to decode if it looks like base64
+      if (value && value.length > 50) {
+        try {
+          const decoded = JSON.parse(Buffer.from(value, 'base64').toString());
+          console.log('   📦 Decoded payment:', JSON.stringify(decoded, null, 2).substring(0, 500));
+        } catch (e) {
+          console.log('   ⚠️ Could not decode payment header');
+        }
+      }
+    }
+  }
+  console.log('========================================\n');
+  next();
+});
 
 // ============================================
 // LANDING PAGE
@@ -374,16 +410,16 @@ app.get('/', (req, res) => {
           nonce: nonce,
         };
 
-        console.log('EIP-712 sign request:', { domain, types, message });
+        console.log('Signing message:', { domain, types, message });
 
         const signature = await window.ethereum.request({
           method: 'eth_signTypedData_v4',
           params: [userAddress, JSON.stringify({ domain, types, primaryType: 'TransferWithAuthorization', message })],
         });
 
-        console.log('Signature obtained:', signature);
+        console.log('Signature:', signature);
 
-        // Build x402 payment payload
+        // Build x402 payment payload - try V2 format
         const payment = {
           x402Version: 2,
           scheme: 'exact',
@@ -393,7 +429,7 @@ app.get('/', (req, res) => {
             authorization: {
               from: userAddress,
               to: accept.payTo,
-              value: amount,
+              value: amount.toString(),
               validAfter: validAfter.toString(),
               validBefore: validBefore.toString(),
               nonce: nonce,
@@ -407,11 +443,12 @@ app.get('/', (req, res) => {
 
         // Step 3: Send request with payment header
         const encodedPayment = btoa(JSON.stringify(payment));
+        console.log('Encoded payment length:', encodedPayment.length);
 
+        // Try X-PAYMENT header (v2 uses this according to some docs)
         const res2 = await fetch(API_URL, {
           method: 'GET',
           headers: { 
-            'PAYMENT-SIGNATURE': encodedPayment,
             'X-PAYMENT': encodedPayment,
           },
         });
@@ -424,7 +461,7 @@ app.get('/', (req, res) => {
           resultEl.textContent = JSON.stringify(data, null, 2);
           resultBox.style.display = 'block';
           
-          const paymentRes = res2.headers.get('payment-response') || res2.headers.get('x-payment-response');
+          const paymentRes = res2.headers.get('x-payment-response');
           if (paymentRes) {
             try {
               const decoded = JSON.parse(atob(paymentRes));
@@ -444,6 +481,16 @@ app.get('/', (req, res) => {
         } else {
           const errorText = await res2.text();
           console.log('Error response:', res2.status, errorText);
+          
+          // Try to get more error info from headers
+          const errorHeader = res2.headers.get('payment-required') || res2.headers.get('x-payment-required');
+          if (errorHeader) {
+            try {
+              const errorInfo = JSON.parse(atob(errorHeader));
+              console.log('Error info from header:', errorInfo);
+            } catch(e) {}
+          }
+          
           throw new Error('Payment rejected: ' + res2.status + (errorText ? ' - ' + errorText : ''));
         }
         
@@ -519,6 +566,7 @@ console.log('✅ x402 payment middleware applied');
 // PROTECTED ROUTE
 app.get('/v1/sentiment/:coin', async (req, res) => {
   console.log('📊 Processing paid request for', req.params.coin);
+  console.log('🎉 PAYMENT VERIFIED - Request reached protected route!');
 
   try {
     const coin = req.params.coin.toUpperCase();
@@ -539,7 +587,7 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
     let overallLabel = avgScore > 0.2 ? 'bullish' : avgScore < -0.2 ? 'bearish' : 'neutral';
 
     paymentLog.push({ timestamp: new Date().toISOString(), amount: '0.03', coin, network: NETWORK_NAME });
-    console.log('💰 PAYMENT CONFIRMED');
+    console.log('💰 PAYMENT CONFIRMED - Total payments:', paymentLog.length);
 
     res.json({
       coin,
