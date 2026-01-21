@@ -11,7 +11,7 @@ import rateLimit from 'express-rate-limit';
 
 // x402 imports
 import { paymentMiddleware, x402ResourceServer } from '@x402/express';
-import { registerExactEvmScheme, ExactEvmScheme } from '@x402/evm/exact/server';
+import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { HTTPFacilitatorClient } from '@x402/core/server';
 import { createFacilitatorConfig } from '@coinbase/x402';
 
@@ -579,16 +579,11 @@ app.get('/health', (req, res) => {
 // ============================================
 console.log('🔧 Creating x402 resource server...');
 
-const server = new x402ResourceServer(facilitatorClient);
+// Use wildcard pattern from official examples
+const server = new x402ResourceServer(facilitatorClient)
+  .register('eip155:*', new ExactEvmScheme());  // Wildcard for ALL EVM chains
 
-// Register wildcard for all EVM chains
-registerExactEvmScheme(server);
-console.log('✅ Wildcard EVM scheme registered (eip155:*)');
-
-// Also register specific network for Base Mainnet
-server.register(NETWORK, new ExactEvmScheme());
-console.log('✅ Specific scheme registered for', NETWORK);
-
+console.log('✅ EVM scheme registered with wildcard (eip155:*)');
 console.log('🔧 Applying x402 payment middleware...');
 
 app.use(
