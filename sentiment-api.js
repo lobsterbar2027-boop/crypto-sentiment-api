@@ -11,7 +11,7 @@ import rateLimit from 'express-rate-limit';
 
 // x402 imports
 import { paymentMiddleware, x402ResourceServer } from '@x402/express';
-import { ExactEvmScheme } from '@x402/evm/exact/server';
+import { registerExactEvmScheme, ExactEvmScheme } from '@x402/evm/exact/server';
 import { HTTPFacilitatorClient } from '@x402/core/server';
 import { createFacilitatorConfig } from '@coinbase/x402';
 
@@ -423,12 +423,6 @@ app.get('/', (req, res) => {
         };
 
         const types = {
-          EIP712Domain: [
-            { name: 'name', type: 'string' },
-            { name: 'version', type: 'string' },
-            { name: 'chainId', type: 'uint256' },
-            { name: 'verifyingContract', type: 'address' },
-          ],
           TransferWithAuthorization: [
             { name: 'from', type: 'address' },
             { name: 'to', type: 'address' },
@@ -439,15 +433,13 @@ app.get('/', (req, res) => {
           ],
         };
 
-        // Use Number for value (Circle example uses Number(ethers.parseUnits(...)))
-        const valueNum = Number(amount);
-        
+        // Use strings for all values - must match what's in authorization payload
         const message = {
           from: userAddress,
           to: accept.payTo,
-          value: valueNum,
-          validAfter: VALID_AFTER,
-          validBefore: VALID_BEFORE,
+          value: amount.toString(),
+          validAfter: VALID_AFTER.toString(),
+          validBefore: VALID_BEFORE.toString(),
           nonce: nonce,
         };
 
@@ -461,19 +453,19 @@ app.get('/', (req, res) => {
 
         console.log('Signature:', signature);
 
-        // x402 v2 payload - authorization must match what was signed
+        // x402 v2 payload - MUST include resource and accepted per spec
         const payment = {
           x402Version: 2,
-          scheme: 'exact',
-          network: accept.network,
+          resource: requirements.resource,
+          accepted: accept,
           payload: {
             signature: signature,
             authorization: {
               from: userAddress,
               to: accept.payTo,
-              value: amount.toString(),  // String in payload
-              validAfter: VALID_AFTER.toString(),  // String in payload
-              validBefore: VALID_BEFORE.toString(),  // String in payload
+              value: amount.toString(),
+              validAfter: VALID_AFTER.toString(),
+              validBefore: VALID_BEFORE.toString(),
               nonce: nonce,
             },
           },
@@ -585,6 +577,18 @@ app.get('/health', (req, res) => {
 // ============================================
 // x402 PAYMENT MIDDLEWARE
 // ============================================
+console.log('🔧 Creating x402 resource server...');
+
+const server = new x402ResourceServer(facilitatorClient);
+
+// Register wildcard for all EVM chains
+registerExactEvmScheme(server);
+console.log('✅ Wildcard EVM scheme registered (eip155:*)');
+
+// Also register specific network for Base Mainnet
+server.register(NETWORK, new ExactEvmScheme());
+console.log('✅ Specific scheme registered for', NETWORK);
+
 console.log('🔧 Applying x402 payment middleware...');
 
 app.use(
@@ -603,8 +607,7 @@ app.use(
         mimeType: 'application/json',
       },
     },
-    new x402ResourceServer(facilitatorClient)
-      .register(NETWORK, new ExactEvmScheme()),
+    server,
   ),
 );
 
