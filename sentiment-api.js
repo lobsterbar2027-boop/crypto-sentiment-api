@@ -33,7 +33,7 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// Configuration
+// Configuration from environment variables
 const evmAddress = process.env.WALLET_ADDRESS;
 const NETWORK = 'eip155:8453'; // Base Mainnet CAIP-2
 const NETWORK_NAME = 'Base Mainnet';
@@ -56,7 +56,7 @@ if (!process.env.CDP_API_KEY_SECRET) {
   process.exit(1);
 }
 
-// Create facilitator client using CDP config (per Carson's guidance)
+// Create facilitator client using CDP config
 const facilitatorClient = new HTTPFacilitatorClient(createFacilitatorConfig());
 
 console.log('✅ Facilitator client configured');
@@ -317,10 +317,8 @@ app.get('/', (req, res) => {
           throw new Error('Unexpected: ' + res1.status);
         }
 
-        // Get payment requirements from header (try multiple header names)
-        let header = res1.headers.get('payment-required') || 
-                     res1.headers.get('x-payment-required') ||
-                     res1.headers.get('PAYMENT-REQUIRED');
+        // Get payment requirements from header
+        let header = res1.headers.get('payment-required') || res1.headers.get('x-payment-required');
         console.log('Payment header found:', !!header);
         
         if (!header) {
@@ -333,7 +331,6 @@ app.get('/', (req, res) => {
         const accept = requirements.accepts[0];
         console.log('Using accept:', accept);
         
-        // V2 uses 'amount', V1 uses 'maxAmountRequired'
         const amount = accept.amount || accept.maxAmountRequired;
         console.log('Amount to pay:', amount);
         
@@ -347,7 +344,6 @@ app.get('/', (req, res) => {
         crypto.getRandomValues(nonceBytes);
         const nonce = '0x' + Array.from(nonceBytes).map(b => b.toString(16).padStart(2, '0')).join('');
         
-        // Get domain from extra field or use USDC defaults
         const domainName = accept.extra?.name || 'USD Coin';
         const domainVersion = accept.extra?.version || '2';
         
@@ -412,7 +408,6 @@ app.get('/', (req, res) => {
         // Step 3: Send request with payment header
         const encodedPayment = btoa(JSON.stringify(payment));
 
-        // Try both header names for compatibility
         const res2 = await fetch(API_URL, {
           method: 'GET',
           headers: { 
