@@ -2,17 +2,20 @@
 import { webcrypto } from 'crypto';
 globalThis.crypto = webcrypto;
 
+import { config } from 'dotenv';
 import express from 'express';
 import cors from 'cors';
 import Sentiment from 'sentiment';
 import vaderSentiment from 'vader-sentiment';
 import rateLimit from 'express-rate-limit';
 
-// x402 v2 imports
+// x402 imports - EXACT pattern from official example
 import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
-import { HTTPFacilitatorClient } from '@x402/core/http';
+import { HTTPFacilitatorClient } from '@x402/core/server';
 import { createFacilitatorConfig } from '@coinbase/x402';
+
+config();
 
 const app = express();
 const sentiment = new Sentiment();
@@ -30,28 +33,34 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
-const NETWORK = 'eip155:8453'; // CAIP-2 format for Base Mainnet
+// Configuration
+const evmAddress = process.env.WALLET_ADDRESS;
+const NETWORK = 'eip155:8453'; // Base Mainnet CAIP-2
 const NETWORK_NAME = 'Base Mainnet';
-const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'; // USDC on Base
-const API_BASE_URL = 'https://crypto-sentiment-api-production.up.railway.app';
+const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 
 console.log('🔄 Initializing x402 v2 (MAINNET)...');
-console.log('   Wallet:', WALLET_ADDRESS);
+console.log('   Wallet:', evmAddress);
 console.log('   Network:', NETWORK);
-console.log('   Asset:', USDC_ADDRESS);
 
-if (!WALLET_ADDRESS) throw new Error('❌ WALLET_ADDRESS required');
-if (!process.env.CDP_API_KEY_ID) throw new Error('❌ CDP_API_KEY_ID required');
-if (!process.env.CDP_API_KEY_SECRET) throw new Error('❌ CDP_API_KEY_SECRET required');
+if (!evmAddress) {
+  console.error('❌ WALLET_ADDRESS environment variable is required');
+  process.exit(1);
+}
+if (!process.env.CDP_API_KEY_ID) {
+  console.error('❌ CDP_API_KEY_ID environment variable is required');
+  process.exit(1);
+}
+if (!process.env.CDP_API_KEY_SECRET) {
+  console.error('❌ CDP_API_KEY_SECRET environment variable is required');
+  process.exit(1);
+}
 
+// Create facilitator client using CDP config (per Carson's guidance)
 const facilitatorClient = new HTTPFacilitatorClient(createFacilitatorConfig());
-const resourceServer = new x402ResourceServer(facilitatorClient)
-  .register(NETWORK, new ExactEvmScheme());
 
-console.log('✅ x402 v2 configured');
+console.log('✅ Facilitator client configured');
 
-const paywallConfig = { appName: 'CryptoSentiment API', testnet: false };
 const paymentLog = [];
 
 const CRYPTO_SUBREDDITS = {
@@ -99,23 +108,6 @@ async function fetchRedditPosts(coin) {
     } catch (error) {}
     await new Promise(resolve => setTimeout(resolve, 500));
   }
-
-  try {
-    const searchResponse = await fetch(
-      `https://www.reddit.com/search.json?q=${coin}+cryptocurrency&sort=hot&limit=25&t=week`,
-      { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } }
-    );
-    if (searchResponse.ok) {
-      const searchData = await searchResponse.json();
-      for (const post of (searchData.data?.children || [])) {
-        const p = post.data;
-        if (p.over_18 || p.removed_by_category || p.stickied) continue;
-        if (!allPosts.some(existing => existing.title === p.title)) {
-          allPosts.push({ title: p.title, selftext: p.selftext?.substring(0, 500) || '', score: p.score, subreddit: p.subreddit });
-        }
-      }
-    }
-  } catch (error) {}
 
   return allPosts;
 }
@@ -221,7 +213,7 @@ app.get('/', (req, res) => {
       <h2>API Documentation</h2>
       <div class="endpoint">
         <span class="method">GET</span><span class="path">/v1/sentiment/:coin</span>
-        <p>Get sentiment analysis. Requires x402 payment.</p>
+        <p>Get sentiment analysis. Requires x402 payment ($0.03 USDC on Base).</p>
         <div class="coins">
           <span class="coin">BTC</span><span class="coin">ETH</span><span class="coin">SOL</span>
           <span class="coin">DOGE</span><span class="coin">XRP</span><span class="coin">ADA</span>
@@ -311,6 +303,7 @@ app.get('/', (req, res) => {
         // Step 1: Get 402 response
         const res1 = await fetch(API_URL);
         console.log('Initial response status:', res1.status);
+        console.log('Response headers:', Object.fromEntries([...res1.headers.entries()]));
         
         if (res1.status !== 402) {
           if (res1.ok) {
@@ -324,37 +317,47 @@ app.get('/', (req, res) => {
           throw new Error('Unexpected: ' + res1.status);
         }
 
-        // Get payment requirements from header
-        const header = res1.headers.get('x-payment-required') || res1.headers.get('payment-required');
-        console.log('Payment header:', header);
+        // Get payment requirements from header (try multiple header names)
+        let header = res1.headers.get('payment-required') || 
+                     res1.headers.get('x-payment-required') ||
+                     res1.headers.get('PAYMENT-REQUIRED');
+        console.log('Payment header found:', !!header);
         
         if (!header) {
-          const body = await res1.json();
-          console.log('402 body:', body);
-          throw new Error('No payment header found');
+          throw new Error('No payment-required header found');
         }
         
         const requirements = JSON.parse(atob(header));
-        console.log('Payment requirements:', requirements);
+        console.log('Payment requirements:', JSON.stringify(requirements, null, 2));
         
         const accept = requirements.accepts[0];
         console.log('Using accept:', accept);
         
+        // V2 uses 'amount', V1 uses 'maxAmountRequired'
+        const amount = accept.amount || accept.maxAmountRequired;
+        console.log('Amount to pay:', amount);
+        
         statusEl.innerHTML = '<div class="status pending">🔄 Sign payment in MetaMask...</div>';
 
-        // Step 2: Create and sign payment
-        const deadline = Math.floor(Date.now() / 1000) + 300;
-        const nonce = '0x' + Array.from(crypto.getRandomValues(new Uint8Array(32))).map(b => b.toString(16).padStart(2, '0')).join('');
+        // Step 2: Create EIP-3009 TransferWithAuthorization
+        const validAfter = 0;
+        const validBefore = Math.floor(Date.now() / 1000) + 300;
         
-        // EIP-712 domain for USDC on Base
+        const nonceBytes = new Uint8Array(32);
+        crypto.getRandomValues(nonceBytes);
+        const nonce = '0x' + Array.from(nonceBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+        
+        // Get domain from extra field or use USDC defaults
+        const domainName = accept.extra?.name || 'USD Coin';
+        const domainVersion = accept.extra?.version || '2';
+        
         const domain = {
-          name: 'USD Coin',
-          version: '2',
+          name: domainName,
+          version: domainVersion,
           chainId: 8453,
           verifyingContract: USDC_ADDRESS,
         };
 
-        // IMPORTANT: Use TransferWithAuthorization (EIP-3009)
         const types = {
           TransferWithAuthorization: [
             { name: 'from', type: 'address' },
@@ -369,24 +372,24 @@ app.get('/', (req, res) => {
         const message = {
           from: userAddress,
           to: accept.payTo,
-          value: accept.maxAmountRequired || accept.amount,
-          validAfter: 0,
-          validBefore: deadline,
+          value: amount,
+          validAfter: validAfter,
+          validBefore: validBefore,
           nonce: nonce,
         };
 
-        console.log('Signing message:', message);
+        console.log('EIP-712 sign request:', { domain, types, message });
 
         const signature = await window.ethereum.request({
           method: 'eth_signTypedData_v4',
           params: [userAddress, JSON.stringify({ domain, types, primaryType: 'TransferWithAuthorization', message })],
         });
 
-        console.log('Signature:', signature);
+        console.log('Signature obtained:', signature);
 
-        // Build payment payload (x402 v1 format)
+        // Build x402 payment payload
         const payment = {
-          x402Version: 1,
+          x402Version: 2,
           scheme: 'exact',
           network: accept.network,
           payload: {
@@ -394,36 +397,43 @@ app.get('/', (req, res) => {
             authorization: {
               from: userAddress,
               to: accept.payTo,
-              value: (accept.maxAmountRequired || accept.amount).toString(),
-              validAfter: '0',
-              validBefore: deadline.toString(),
+              value: amount,
+              validAfter: validAfter.toString(),
+              validBefore: validBefore.toString(),
               nonce: nonce,
             },
           },
         };
 
-        console.log('Payment payload:', payment);
+        console.log('Payment payload:', JSON.stringify(payment, null, 2));
 
         statusEl.innerHTML = '<div class="status pending">🔄 Submitting payment...</div>';
 
-        // Step 3: Send request with payment
+        // Step 3: Send request with payment header
         const encodedPayment = btoa(JSON.stringify(payment));
 
+        // Try both header names for compatibility
         const res2 = await fetch(API_URL, {
-          headers: { 'X-PAYMENT': encodedPayment },
+          method: 'GET',
+          headers: { 
+            'PAYMENT-SIGNATURE': encodedPayment,
+            'X-PAYMENT': encodedPayment,
+          },
         });
 
         console.log('Payment response status:', res2.status);
+        console.log('Payment response headers:', Object.fromEntries([...res2.headers.entries()]));
 
         if (res2.ok) {
           const data = await res2.json();
           resultEl.textContent = JSON.stringify(data, null, 2);
           resultBox.style.display = 'block';
           
-          const paymentRes = res2.headers.get('x-payment-response') || res2.headers.get('payment-response');
+          const paymentRes = res2.headers.get('payment-response') || res2.headers.get('x-payment-response');
           if (paymentRes) {
             try {
               const decoded = JSON.parse(atob(paymentRes));
+              console.log('Payment response decoded:', decoded);
               if (decoded.transaction || decoded.txHash) {
                 const txHash = decoded.transaction || decoded.txHash;
                 statusEl.innerHTML = '<div class="status success">✅ Success! <a href="https://basescan.org/tx/' + txHash + '" target="_blank" style="color:#86efac">View on BaseScan →</a></div>';
@@ -438,8 +448,8 @@ app.get('/', (req, res) => {
           }
         } else {
           const errorText = await res2.text();
-          console.log('Error response:', errorText);
-          throw new Error('Payment rejected: ' + res2.status + ' - ' + errorText);
+          console.log('Error response:', res2.status, errorText);
+          throw new Error('Payment rejected: ' + res2.status + (errorText ? ' - ' + errorText : ''));
         }
         
       } catch (error) {
@@ -477,106 +487,39 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
     network: NETWORK_NAME,
-    wallet: WALLET_ADDRESS,
+    wallet: evmAddress,
     paymentsReceived: paymentLog.length,
     totalRevenue: '$' + (paymentLog.length * 0.03).toFixed(2)
   });
 });
 
 // ============================================
-// x402 PAYMENT MIDDLEWARE - V2 SCHEMA COMPLIANT
+// x402 PAYMENT MIDDLEWARE - EXACT official example pattern
 // ============================================
-console.log('🔧 Applying x402scan V2 compliant payment middleware...');
+console.log('🔧 Applying x402 payment middleware...');
 
 app.use(
   paymentMiddleware(
     {
       'GET /v1/sentiment/*': {
-        // x402scan V2 compliant accepts configuration
-        accepts: {
-          scheme: 'exact',
-          network: NETWORK,                    // CAIP-2 format: "eip155:8453"
-          asset: USDC_ADDRESS,                 // Required: USDC contract address
-          maxTimeoutSeconds: 60,               // Required: payment timeout
-          payTo: WALLET_ADDRESS,
-          price: '$0.03',                      // Will be converted to "amount" in base units
-          extra: {                             // Required in V2
-            name: 'USD Coin',
-            version: '2',
+        accepts: [
+          {
+            scheme: 'exact',
+            price: '$0.03',
+            network: NETWORK,
+            payTo: evmAddress,
           },
-        },
-        // x402scan V2 resource object
-        resource: {
-          url: `${API_BASE_URL}/v1/sentiment/:coin`,
-          description: 'Get AI-powered Reddit sentiment analysis for any cryptocurrency',
-          mimeType: 'application/json',
-        },
-        // Bazaar extension for x402scan UI
-        extensions: {
-          bazaar: {
-            info: {
-              input: {
-                coin: 'BTC',
-                description: 'Cryptocurrency symbol (BTC, ETH, SOL, DOGE, XRP, ADA, etc.)',
-              },
-              output: {
-                coin: 'BTC',
-                timestamp: '2025-01-20T12:00:00.000Z',
-                source: 'Reddit',
-                overall: {
-                  sentiment: 'bullish',
-                  score: 0.35,
-                  confidence: 0.7,
-                  postsAnalyzed: 20,
-                },
-                samplePosts: [
-                  { title: 'Example post title', subreddit: 'bitcoin', sentiment: 'bullish', score: 0.5 }
-                ],
-                payment: { network: 'Base Mainnet', amount: '0.03 USDC', status: 'confirmed' },
-              },
-            },
-            schema: {
-              input: {
-                type: 'object',
-                properties: {
-                  coin: {
-                    type: 'string',
-                    enum: ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP', 'ADA', 'MATIC', 'DOT', 'LINK', 'AVAX'],
-                    description: 'Cryptocurrency symbol',
-                  },
-                },
-                required: ['coin'],
-              },
-              output: {
-                type: 'object',
-                properties: {
-                  coin: { type: 'string' },
-                  timestamp: { type: 'string', format: 'date-time' },
-                  source: { type: 'string' },
-                  overall: {
-                    type: 'object',
-                    properties: {
-                      sentiment: { type: 'string', enum: ['bullish', 'bearish', 'neutral'] },
-                      score: { type: 'number' },
-                      confidence: { type: 'number' },
-                      postsAnalyzed: { type: 'integer' },
-                    },
-                  },
-                  samplePosts: { type: 'array' },
-                  payment: { type: 'object' },
-                },
-              },
-            },
-          },
-        },
+        ],
+        description: 'Get AI-powered Reddit sentiment analysis for any cryptocurrency',
+        mimeType: 'application/json',
       },
     },
-    resourceServer,
-    paywallConfig,
+    new x402ResourceServer(facilitatorClient)
+      .register(NETWORK, new ExactEvmScheme()),
   ),
 );
 
-console.log('✅ x402scan V2 compliant payment middleware applied');
+console.log('✅ x402 payment middleware applied');
 
 // PROTECTED ROUTE
 app.get('/v1/sentiment/:coin', async (req, res) => {
@@ -624,7 +567,7 @@ app.get('/admin/payments', (req, res) => {
 });
 
 // Start
-console.log('🚀 CryptoSentiment API - x402 v2 MAINNET (x402scan V2 compliant)');
+console.log('🚀 CryptoSentiment API - x402 v2 MAINNET');
 console.log('📡 Server: http://localhost:' + PORT);
 console.log('🌐 Network:', NETWORK);
 console.log('💵 Price: $0.03 USDC');
