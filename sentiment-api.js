@@ -389,24 +389,46 @@ app.get('/', (req, res) => {
         statusEl.innerHTML = '<div class="status pending">🔄 Sign payment in MetaMask...</div>';
 
         // Step 2: Create EIP-3009 TransferWithAuthorization
-        const validAfter = 0;
-        const validBefore = Math.floor(Date.now() / 1000) + 300;
+        // Match Circle's working example format exactly
+        const VALID_AFTER = 0;  // Circle uses 0
+        const VALID_BEFORE = Math.floor(Date.now() / 1000) + 3600;  // 1 hour from now
         
         const nonceBytes = new Uint8Array(32);
         crypto.getRandomValues(nonceBytes);
         const nonce = '0x' + Array.from(nonceBytes).map(b => b.toString(16).padStart(2, '0')).join('');
         
+        // Use server's domain config
         const domainName = accept.extra?.name || 'USD Coin';
         const domainVersion = accept.extra?.version || '2';
+        const tokenAddress = accept.asset || USDC_ADDRESS;
+        
+        console.log('=== EIP-712 Signing Config ===');
+        console.log('Domain name:', domainName);
+        console.log('Domain version:', domainVersion);
+        console.log('Chain ID:', 8453);
+        console.log('Contract:', tokenAddress);
+        console.log('From:', userAddress);
+        console.log('To:', accept.payTo);
+        console.log('Value:', amount);
+        console.log('Valid After:', VALID_AFTER);
+        console.log('Valid Before:', VALID_BEFORE);
+        console.log('Nonce:', nonce);
+        console.log('==============================');
         
         const domain = {
           name: domainName,
           version: domainVersion,
           chainId: 8453,
-          verifyingContract: USDC_ADDRESS,
+          verifyingContract: tokenAddress,
         };
 
         const types = {
+          EIP712Domain: [
+            { name: 'name', type: 'string' },
+            { name: 'version', type: 'string' },
+            { name: 'chainId', type: 'uint256' },
+            { name: 'verifyingContract', type: 'address' },
+          ],
           TransferWithAuthorization: [
             { name: 'from', type: 'address' },
             { name: 'to', type: 'address' },
@@ -417,17 +439,20 @@ app.get('/', (req, res) => {
           ],
         };
 
+        // Use Number for value (Circle example uses Number(ethers.parseUnits(...)))
+        const valueNum = Number(amount);
+        
         const message = {
           from: userAddress,
           to: accept.payTo,
-          value: amount.toString(),
-          validAfter: validAfter.toString(),
-          validBefore: validBefore.toString(),
+          value: valueNum,
+          validAfter: VALID_AFTER,
+          validBefore: VALID_BEFORE,
           nonce: nonce,
         };
 
-        console.log('EIP-712 Domain:', domain);
-        console.log('EIP-712 Message:', message);
+        console.log('EIP-712 Domain:', JSON.stringify(domain));
+        console.log('EIP-712 Message:', JSON.stringify(message));
 
         const signature = await window.ethereum.request({
           method: 'eth_signTypedData_v4',
@@ -436,19 +461,19 @@ app.get('/', (req, res) => {
 
         console.log('Signature:', signature);
 
-        // Build FULL x402 v2 payment payload (per spec)
+        // x402 v2 payload - authorization must match what was signed
         const payment = {
           x402Version: 2,
-          resource: requirements.resource,
-          accepted: accept,
+          scheme: 'exact',
+          network: accept.network,
           payload: {
             signature: signature,
             authorization: {
               from: userAddress,
               to: accept.payTo,
-              value: amount.toString(),
-              validAfter: validAfter.toString(),
-              validBefore: validBefore.toString(),
+              value: amount.toString(),  // String in payload
+              validAfter: VALID_AFTER.toString(),  // String in payload
+              validBefore: VALID_BEFORE.toString(),  // String in payload
               nonce: nonce,
             },
           },
