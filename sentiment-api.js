@@ -9,7 +9,7 @@ import Sentiment from 'sentiment';
 import vaderSentiment from 'vader-sentiment';
 import rateLimit from 'express-rate-limit';
 
-// x402 imports - EXACT pattern from official example
+// x402 imports
 import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { HTTPFacilitatorClient } from '@x402/core/server';
@@ -43,7 +43,7 @@ console.log('🔄 Initializing x402 v2 (MAINNET)...');
 console.log('   Wallet:', evmAddress);
 console.log('   Network:', NETWORK);
 console.log('   CDP_API_KEY_ID:', process.env.CDP_API_KEY_ID ? '✅ Set' : '❌ Missing');
-console.log('   CDP_API_KEY_SECRET:', process.env.CDP_API_KEY_SECRET ? '✅ Set (' + process.env.CDP_API_KEY_SECRET.substring(0, 20) + '...)' : '❌ Missing');
+console.log('   CDP_API_KEY_SECRET:', process.env.CDP_API_KEY_SECRET ? '✅ Set' : '❌ Missing');
 
 if (!evmAddress) {
   console.error('❌ WALLET_ADDRESS environment variable is required');
@@ -58,10 +58,14 @@ if (!process.env.CDP_API_KEY_SECRET) {
   process.exit(1);
 }
 
-// Create facilitator client using CDP config
-console.log('🔧 Creating facilitator config...');
-const facilitatorConfig = createFacilitatorConfig();
-console.log('   Facilitator config:', JSON.stringify(facilitatorConfig, null, 2));
+// Create facilitator client - EXPLICITLY pass credentials
+console.log('🔧 Creating facilitator config with explicit credentials...');
+const facilitatorConfig = createFacilitatorConfig(
+  process.env.CDP_API_KEY_ID,
+  process.env.CDP_API_KEY_SECRET
+);
+console.log('   Facilitator URL:', facilitatorConfig.url);
+console.log('   Has createAuthHeaders:', !!facilitatorConfig.createAuthHeaders);
 
 const facilitatorClient = new HTTPFacilitatorClient(facilitatorConfig);
 console.log('✅ Facilitator client configured');
@@ -118,32 +122,44 @@ async function fetchRedditPosts(coin) {
 }
 
 // ============================================
-// DEBUG LOGGING MIDDLEWARE - Add before payment middleware
+// DEBUG LOGGING MIDDLEWARE
 // ============================================
 app.use('/v1/sentiment', (req, res, next) => {
   console.log('\n========== INCOMING REQUEST ==========');
   console.log('🔍 Method:', req.method);
   console.log('🔍 URL:', req.url);
-  console.log('🔍 Path:', req.path);
-  console.log('🔍 Headers:');
   
-  // Log all payment-related headers
-  const paymentHeaders = ['x-payment', 'payment-signature', 'payment', 'authorization'];
-  for (const [key, value] of Object.entries(req.headers)) {
-    if (paymentHeaders.some(h => key.toLowerCase().includes(h))) {
-      console.log(`   💳 ${key}: ${value ? value.substring(0, 100) + '...' : 'null'}`);
-      
-      // Try to decode if it looks like base64
-      if (value && value.length > 50) {
-        try {
-          const decoded = JSON.parse(Buffer.from(value, 'base64').toString());
-          console.log('   📦 Decoded payment:', JSON.stringify(decoded, null, 2).substring(0, 500));
-        } catch (e) {
-          console.log('   ⚠️ Could not decode payment header');
-        }
-      }
+  // Log ALL headers to see what's received
+  console.log('🔍 All headers:', JSON.stringify(req.headers, null, 2).substring(0, 1500));
+  
+  // Log payment headers
+  const xPayment = req.headers['x-payment'];
+  const paymentSig = req.headers['payment-signature'];
+  
+  if (xPayment) {
+    console.log('💳 X-PAYMENT header found, length:', xPayment.length);
+    try {
+      const decoded = JSON.parse(Buffer.from(xPayment, 'base64').toString());
+      console.log('📦 Decoded X-PAYMENT:', JSON.stringify(decoded, null, 2).substring(0, 1000));
+    } catch (e) {
+      console.log('⚠️ Could not decode X-PAYMENT:', e.message);
     }
   }
+  
+  if (paymentSig) {
+    console.log('💳 PAYMENT-SIGNATURE header found, length:', paymentSig.length);
+    try {
+      const decoded = JSON.parse(Buffer.from(paymentSig, 'base64').toString());
+      console.log('📦 Decoded PAYMENT-SIGNATURE:', JSON.stringify(decoded, null, 2).substring(0, 1000));
+    } catch (e) {
+      console.log('⚠️ Could not decode PAYMENT-SIGNATURE:', e.message);
+    }
+  }
+  
+  if (!xPayment && !paymentSig) {
+    console.log('ℹ️ No payment header - initial 402 request');
+  }
+  
   console.log('========================================\n');
   next();
 });
@@ -368,7 +384,7 @@ app.get('/', (req, res) => {
         console.log('Using accept:', accept);
         
         const amount = accept.amount || accept.maxAmountRequired;
-        console.log('Amount to pay:', amount);
+        console.log('Amount to pay:', amount, 'Type:', typeof amount);
         
         statusEl.innerHTML = '<div class="status pending">🔄 Sign payment in MetaMask...</div>';
 
@@ -404,13 +420,14 @@ app.get('/', (req, res) => {
         const message = {
           from: userAddress,
           to: accept.payTo,
-          value: amount,
-          validAfter: validAfter,
-          validBefore: validBefore,
+          value: amount.toString(),
+          validAfter: validAfter.toString(),
+          validBefore: validBefore.toString(),
           nonce: nonce,
         };
 
-        console.log('Signing message:', { domain, types, message });
+        console.log('EIP-712 Domain:', domain);
+        console.log('EIP-712 Message:', message);
 
         const signature = await window.ethereum.request({
           method: 'eth_signTypedData_v4',
@@ -419,11 +436,11 @@ app.get('/', (req, res) => {
 
         console.log('Signature:', signature);
 
-        // Build x402 payment payload - try V2 format
+        // Build FULL x402 v2 payment payload (per spec)
         const payment = {
           x402Version: 2,
-          scheme: 'exact',
-          network: accept.network,
+          resource: requirements.resource,
+          accepted: accept,
           payload: {
             signature: signature,
             authorization: {
@@ -441,15 +458,15 @@ app.get('/', (req, res) => {
 
         statusEl.innerHTML = '<div class="status pending">🔄 Submitting payment...</div>';
 
-        // Step 3: Send request with payment header
         const encodedPayment = btoa(JSON.stringify(payment));
         console.log('Encoded payment length:', encodedPayment.length);
 
-        // Try X-PAYMENT header (v2 uses this according to some docs)
+        // v2 spec says use PAYMENT-SIGNATURE header
         const res2 = await fetch(API_URL, {
           method: 'GET',
           headers: { 
             'X-PAYMENT': encodedPayment,
+            'PAYMENT-SIGNATURE': encodedPayment,
           },
         });
 
@@ -461,7 +478,7 @@ app.get('/', (req, res) => {
           resultEl.textContent = JSON.stringify(data, null, 2);
           resultBox.style.display = 'block';
           
-          const paymentRes = res2.headers.get('x-payment-response');
+          const paymentRes = res2.headers.get('x-payment-response') || res2.headers.get('payment-response');
           if (paymentRes) {
             try {
               const decoded = JSON.parse(atob(paymentRes));
@@ -482,13 +499,18 @@ app.get('/', (req, res) => {
           const errorText = await res2.text();
           console.log('Error response:', res2.status, errorText);
           
-          // Try to get more error info from headers
+          // Try to get more error info
           const errorHeader = res2.headers.get('payment-required') || res2.headers.get('x-payment-required');
           if (errorHeader) {
             try {
               const errorInfo = JSON.parse(atob(errorHeader));
-              console.log('Error info from header:', errorInfo);
-            } catch(e) {}
+              console.log('Error info from header:', JSON.stringify(errorInfo, null, 2));
+              if (errorInfo.error) {
+                throw new Error(errorInfo.error);
+              }
+            } catch(e) {
+              if (e.message && !e.message.includes('JSON')) throw e;
+            }
           }
           
           throw new Error('Payment rejected: ' + res2.status + (errorText ? ' - ' + errorText : ''));
@@ -536,7 +558,7 @@ app.get('/health', (req, res) => {
 });
 
 // ============================================
-// x402 PAYMENT MIDDLEWARE - EXACT official example pattern
+// x402 PAYMENT MIDDLEWARE
 // ============================================
 console.log('🔧 Applying x402 payment middleware...');
 
@@ -565,8 +587,7 @@ console.log('✅ x402 payment middleware applied');
 
 // PROTECTED ROUTE
 app.get('/v1/sentiment/:coin', async (req, res) => {
-  console.log('📊 Processing paid request for', req.params.coin);
-  console.log('🎉 PAYMENT VERIFIED - Request reached protected route!');
+  console.log('🎉 PAYMENT VERIFIED - Processing request for', req.params.coin);
 
   try {
     const coin = req.params.coin.toUpperCase();
@@ -587,7 +608,7 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
     let overallLabel = avgScore > 0.2 ? 'bullish' : avgScore < -0.2 ? 'bearish' : 'neutral';
 
     paymentLog.push({ timestamp: new Date().toISOString(), amount: '0.03', coin, network: NETWORK_NAME });
-    console.log('💰 PAYMENT CONFIRMED - Total payments:', paymentLog.length);
+    console.log('💰 Payment logged - Total:', paymentLog.length);
 
     res.json({
       coin,
