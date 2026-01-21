@@ -8,7 +8,7 @@ import Sentiment from 'sentiment';
 import vaderSentiment from 'vader-sentiment';
 import rateLimit from 'express-rate-limit';
 
-// x402 v2 imports - Using Carson's exact pattern for CDP facilitator
+// x402 v2 imports
 import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { HTTPFacilitatorClient } from '@x402/core/http';
@@ -18,14 +18,10 @@ const app = express();
 const sentiment = new Sentiment();
 const PORT = process.env.PORT || 3000;
 
-// Trust proxy (required for Railway)
 app.set('trust proxy', 1);
-
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
@@ -34,50 +30,30 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// Configuration - MAINNET ONLY
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
-const NETWORK = 'eip155:8453'; // Base Mainnet
+const NETWORK = 'eip155:8453'; // CAIP-2 format for Base Mainnet
 const NETWORK_NAME = 'Base Mainnet';
+const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'; // USDC on Base
+const API_BASE_URL = 'https://crypto-sentiment-api-production.up.railway.app';
 
 console.log('🔄 Initializing x402 v2 (MAINNET)...');
 console.log('   Wallet:', WALLET_ADDRESS);
-console.log('   Network:', NETWORK, `(${NETWORK_NAME})`);
+console.log('   Network:', NETWORK);
+console.log('   Asset:', USDC_ADDRESS);
 
-// Validate environment variables
-if (!WALLET_ADDRESS) {
-  throw new Error('❌ WALLET_ADDRESS environment variable is required');
-}
+if (!WALLET_ADDRESS) throw new Error('❌ WALLET_ADDRESS required');
+if (!process.env.CDP_API_KEY_ID) throw new Error('❌ CDP_API_KEY_ID required');
+if (!process.env.CDP_API_KEY_SECRET) throw new Error('❌ CDP_API_KEY_SECRET required');
 
-if (!process.env.CDP_API_KEY_ID) {
-  throw new Error('❌ CDP_API_KEY_ID environment variable is required');
-}
-
-if (!process.env.CDP_API_KEY_SECRET) {
-  throw new Error('❌ CDP_API_KEY_SECRET environment variable is required');
-}
-
-console.log('   CDP Key ID:', process.env.CDP_API_KEY_ID.substring(0, 20) + '...');
-console.log('   Facilitator: Coinbase CDP');
-
-// Create facilitator client using Carson's exact pattern
 const facilitatorClient = new HTTPFacilitatorClient(createFacilitatorConfig());
-
-// Create resource server and register the EVM scheme
 const resourceServer = new x402ResourceServer(facilitatorClient)
   .register(NETWORK, new ExactEvmScheme());
 
-console.log('✅ x402 v2 configured for MAINNET');
+console.log('✅ x402 v2 configured');
 
-// Paywall config
-const paywallConfig = {
-  appName: 'CryptoSentiment API',
-  testnet: false,
-};
-
-// Payment tracking
+const paywallConfig = { appName: 'CryptoSentiment API', testnet: false };
 const paymentLog = [];
 
-// Crypto subreddit mapping
 const CRYPTO_SUBREDDITS = {
   BTC: ['bitcoin', 'Bitcoin'],
   ETH: ['ethereum', 'ethtrader'],
@@ -92,25 +68,17 @@ const CRYPTO_SUBREDDITS = {
   DEFAULT: ['CryptoCurrency', 'CryptoMarkets']
 };
 
-// Helper: Analyze sentiment
 function analyzeSentiment(text) {
   const sentimentResult = sentiment.analyze(text);
   const vaderResult = vaderSentiment.SentimentIntensityAnalyzer.polarity_scores(text);
-
   const score = (sentimentResult.comparative + vaderResult.compound) / 2;
   let label;
   if (score > 0.2) label = 'bullish';
   else if (score < -0.2) label = 'bearish';
   else label = 'neutral';
-
-  return {
-    score: parseFloat(score.toFixed(4)),
-    label,
-    confidence: Math.abs(score)
-  };
+  return { score: parseFloat(score.toFixed(4)), label, confidence: Math.abs(score) };
 }
 
-// Helper: Fetch Reddit posts
 async function fetchRedditPosts(coin) {
   const subreddits = CRYPTO_SUBREDDITS[coin.toUpperCase()] || CRYPTO_SUBREDDITS.DEFAULT;
   const allPosts = [];
@@ -119,59 +87,31 @@ async function fetchRedditPosts(coin) {
     try {
       const response = await fetch(
         `https://www.reddit.com/r/${subreddit}/hot.json?limit=25`,
-        {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json',
-          }
-        }
+        { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } }
       );
-      
       if (!response.ok) continue;
-
       const data = await response.json();
-      const posts = data.data?.children || [];
-
-      for (const post of posts) {
+      for (const post of (data.data?.children || [])) {
         const p = post.data;
         if (p.over_18 || p.removed_by_category || p.stickied) continue;
-        
-        allPosts.push({
-          title: p.title,
-          selftext: p.selftext?.substring(0, 500) || '',
-          score: p.score,
-          subreddit: subreddit
-        });
+        allPosts.push({ title: p.title, selftext: p.selftext?.substring(0, 500) || '', score: p.score, subreddit });
       }
-    } catch (error) {
-      // Silent fail
-    }
-    
+    } catch (error) {}
     await new Promise(resolve => setTimeout(resolve, 500));
   }
 
-  // Search
   try {
     const searchResponse = await fetch(
       `https://www.reddit.com/search.json?q=${coin}+cryptocurrency&sort=hot&limit=25&t=week`,
       { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } }
     );
-
     if (searchResponse.ok) {
       const searchData = await searchResponse.json();
-      const searchPosts = searchData.data?.children || [];
-
-      for (const post of searchPosts) {
+      for (const post of (searchData.data?.children || [])) {
         const p = post.data;
         if (p.over_18 || p.removed_by_category || p.stickied) continue;
-        const isDuplicate = allPosts.some(existing => existing.title === p.title);
-        if (!isDuplicate) {
-          allPosts.push({
-            title: p.title,
-            selftext: p.selftext?.substring(0, 500) || '',
-            score: p.score,
-            subreddit: p.subreddit
-          });
+        if (!allPosts.some(existing => existing.title === p.title)) {
+          allPosts.push({ title: p.title, selftext: p.selftext?.substring(0, 500) || '', score: p.score, subreddit: p.subreddit });
         }
       }
     }
@@ -181,7 +121,7 @@ async function fetchRedditPosts(coin) {
 }
 
 // ============================================
-// LANDING PAGE - HTML at root
+// LANDING PAGE
 // ============================================
 app.get('/', (req, res) => {
   const html = `<!DOCTYPE html>
@@ -189,157 +129,50 @@ app.get('/', (req, res) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CryptoSentiment API - AI-Powered Crypto Analysis</title>
+  <title>CryptoSentiment API</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔮</text></svg>">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 100%);
-      min-height: 100vh;
-      color: #fff;
-    }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 100%); min-height: 100vh; color: #fff; }
     .container { max-width: 900px; margin: 0 auto; padding: 40px 20px; }
-    
-    /* Header */
     header { text-align: center; margin-bottom: 48px; }
     .logo { font-size: 64px; margin-bottom: 16px; }
-    h1 {
-      font-size: 36px;
-      margin-bottom: 12px;
-      background: linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
+    h1 { font-size: 36px; margin-bottom: 12px; background: linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
     .tagline { color: #9ca3af; font-size: 18px; }
-    
-    /* Cards */
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; margin-bottom: 48px; }
-    .card {
-      background: rgba(255,255,255,0.05);
-      border-radius: 16px;
-      padding: 24px;
-      border: 1px solid rgba(255,255,255,0.1);
-    }
-    .card h3 { margin-bottom: 12px; color: #fff; display: flex; align-items: center; gap: 8px; }
+    .card { background: rgba(255,255,255,0.05); border-radius: 16px; padding: 24px; border: 1px solid rgba(255,255,255,0.1); }
+    .card h3 { margin-bottom: 12px; color: #fff; }
     .card p { color: #9ca3af; font-size: 14px; line-height: 1.6; }
-    
-    /* Payment Section */
-    .payment-section {
-      background: rgba(59, 130, 246, 0.1);
-      border: 1px solid rgba(59, 130, 246, 0.3);
-      border-radius: 20px;
-      padding: 32px;
-      margin-bottom: 48px;
-    }
+    .payment-section { background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 20px; padding: 32px; margin-bottom: 48px; }
     .payment-section h2 { text-align: center; margin-bottom: 24px; }
-    .price-tag {
-      text-align: center;
-      margin-bottom: 24px;
-    }
+    .price-tag { text-align: center; margin-bottom: 24px; }
     .price { font-size: 48px; font-weight: bold; color: #3b82f6; }
     .price-label { color: #9ca3af; }
-    
-    select, button {
-      width: 100%;
-      padding: 16px;
-      border-radius: 12px;
-      font-size: 16px;
-      margin-bottom: 12px;
-    }
-    select {
-      background: rgba(0,0,0,0.3);
-      border: 1px solid rgba(255,255,255,0.2);
-      color: #fff;
-      cursor: pointer;
-    }
-    button {
-      border: none;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-    .btn-primary {
-      background: linear-gradient(90deg, #3b82f6, #8b5cf6);
-      color: white;
-    }
+    select, button { width: 100%; padding: 16px; border-radius: 12px; font-size: 16px; margin-bottom: 12px; }
+    select { background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.2); color: #fff; cursor: pointer; }
+    button { border: none; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+    .btn-primary { background: linear-gradient(90deg, #3b82f6, #8b5cf6); color: white; }
     .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(59, 130, 246, 0.3); }
     .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-    
-    .wallet-info {
-      background: rgba(0,0,0,0.2);
-      border-radius: 8px;
-      padding: 12px;
-      margin-bottom: 16px;
-      font-size: 13px;
-      display: none;
-    }
+    .wallet-info { background: rgba(0,0,0,0.2); border-radius: 8px; padding: 12px; margin-bottom: 16px; font-size: 13px; display: none; }
     .wallet-info .label { color: #9ca3af; }
     .wallet-info .value { color: #fff; font-family: monospace; }
-    
     .status { padding: 12px; border-radius: 8px; margin: 16px 0; font-size: 14px; text-align: center; }
     .status.pending { background: rgba(59, 130, 246, 0.2); color: #93c5fd; }
     .status.success { background: rgba(34, 197, 94, 0.2); color: #86efac; }
     .status.error { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
-    
-    .result {
-      background: rgba(0,0,0,0.3);
-      border-radius: 12px;
-      padding: 16px;
-      margin-top: 16px;
-      max-height: 300px;
-      overflow-y: auto;
-      display: none;
-    }
+    .result { background: rgba(0,0,0,0.3); border-radius: 12px; padding: 16px; margin-top: 16px; max-height: 300px; overflow-y: auto; display: none; }
     .result pre { font-size: 12px; white-space: pre-wrap; word-break: break-all; color: #d1d5db; }
-    
-    /* API Docs */
     .docs { margin-bottom: 48px; }
     .docs h2 { margin-bottom: 24px; }
-    .endpoint {
-      background: rgba(0,0,0,0.2);
-      border-radius: 12px;
-      padding: 16px;
-      margin-bottom: 12px;
-    }
-    .method { 
-      display: inline-block;
-      background: #22c55e;
-      color: #000;
-      padding: 4px 8px;
-      border-radius: 4px;
-      font-size: 12px;
-      font-weight: bold;
-      margin-right: 8px;
-    }
+    .endpoint { background: rgba(0,0,0,0.2); border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+    .method { display: inline-block; background: #22c55e; color: #000; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-right: 8px; }
     .path { font-family: monospace; color: #fff; }
     .endpoint p { margin-top: 8px; color: #9ca3af; font-size: 14px; }
-    code {
-      background: rgba(0,0,0,0.3);
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-size: 13px;
-    }
-    
-    /* Footer */
-    footer {
-      text-align: center;
-      padding: 24px;
-      color: #6b7280;
-      font-size: 14px;
-      border-top: 1px solid rgba(255,255,255,0.1);
-    }
+    footer { text-align: center; padding: 24px; color: #6b7280; font-size: 14px; border-top: 1px solid rgba(255,255,255,0.1); }
     footer a { color: #3b82f6; text-decoration: none; }
-    
-    /* Coins */
     .coins { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-    .coin {
-      background: rgba(139, 92, 246, 0.2);
-      color: #c4b5fd;
-      padding: 4px 12px;
-      border-radius: 20px;
-      font-size: 12px;
-    }
+    .coin { background: rgba(139, 92, 246, 0.2); color: #c4b5fd; padding: 4px 12px; border-radius: 20px; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -351,18 +184,9 @@ app.get('/', (req, res) => {
     </header>
 
     <div class="grid">
-      <div class="card">
-        <h3>📊 Real-Time Analysis</h3>
-        <p>Scrapes Reddit in real-time to analyze community sentiment across multiple crypto subreddits.</p>
-      </div>
-      <div class="card">
-        <h3>🤖 Dual AI Models</h3>
-        <p>Combines VADER and custom sentiment analysis for more accurate bullish/bearish/neutral classifications.</p>
-      </div>
-      <div class="card">
-        <h3>⚡ x402 Payments</h3>
-        <p>Pay-per-query using USDC on Base. No subscriptions, no API keys - just micropayments.</p>
-      </div>
+      <div class="card"><h3>📊 Real-Time Analysis</h3><p>Scrapes Reddit in real-time to analyze community sentiment across multiple crypto subreddits.</p></div>
+      <div class="card"><h3>🤖 Dual AI Models</h3><p>Combines VADER and custom sentiment analysis for accurate bullish/bearish/neutral classifications.</p></div>
+      <div class="card"><h3>⚡ x402 Payments</h3><p>Pay-per-query using USDC on Base. No subscriptions, no API keys.</p></div>
     </div>
 
     <div class="payment-section">
@@ -379,10 +203,6 @@ app.get('/', (req, res) => {
         <option value="DOGE">Dogecoin (DOGE)</option>
         <option value="XRP">Ripple (XRP)</option>
         <option value="ADA">Cardano (ADA)</option>
-        <option value="MATIC">Polygon (MATIC)</option>
-        <option value="DOT">Polkadot (DOT)</option>
-        <option value="LINK">Chainlink (LINK)</option>
-        <option value="AVAX">Avalanche (AVAX)</option>
       </select>
 
       <div id="walletInfo" class="wallet-info">
@@ -390,13 +210,8 @@ app.get('/', (req, res) => {
         <div><span class="label">USDC Balance:</span> <span class="value" id="usdcBalance"></span></div>
       </div>
 
-      <button id="connectBtn" class="btn-primary" onclick="connectWallet()">
-        Connect MetaMask
-      </button>
-      
-      <button id="payBtn" class="btn-primary" onclick="makePayment()" style="display: none;">
-        Pay & Get Sentiment
-      </button>
+      <button id="connectBtn" class="btn-primary" onclick="connectWallet()">Connect MetaMask</button>
+      <button id="payBtn" class="btn-primary" onclick="makePayment()" style="display: none;">Pay & Get Sentiment</button>
 
       <div id="status"></div>
       <div id="resultBox" class="result"><pre id="result"></pre></div>
@@ -404,47 +219,25 @@ app.get('/', (req, res) => {
 
     <div class="docs">
       <h2>API Documentation</h2>
-      
       <div class="endpoint">
-        <span class="method">GET</span>
-        <span class="path">/v1/sentiment/:coin</span>
-        <p>Get sentiment analysis for a cryptocurrency. Requires x402 payment header.</p>
+        <span class="method">GET</span><span class="path">/v1/sentiment/:coin</span>
+        <p>Get sentiment analysis. Requires x402 payment.</p>
         <div class="coins">
-          <span class="coin">BTC</span>
-          <span class="coin">ETH</span>
-          <span class="coin">SOL</span>
-          <span class="coin">DOGE</span>
-          <span class="coin">XRP</span>
-          <span class="coin">ADA</span>
-          <span class="coin">MATIC</span>
-          <span class="coin">DOT</span>
-          <span class="coin">LINK</span>
-          <span class="coin">AVAX</span>
+          <span class="coin">BTC</span><span class="coin">ETH</span><span class="coin">SOL</span>
+          <span class="coin">DOGE</span><span class="coin">XRP</span><span class="coin">ADA</span>
         </div>
       </div>
-      
-      <div class="endpoint">
-        <span class="method">GET</span>
-        <span class="path">/health</span>
-        <p>Health check endpoint. Returns server status and payment stats.</p>
-      </div>
-      
-      <div class="endpoint">
-        <span class="method">GET</span>
-        <span class="path">/api</span>
-        <p>Returns API information as JSON.</p>
-      </div>
+      <div class="endpoint"><span class="method">GET</span><span class="path">/health</span><p>Health check endpoint.</p></div>
+      <div class="endpoint"><span class="method">GET</span><span class="path">/api</span><p>API info as JSON.</p></div>
     </div>
 
     <footer>
       Powered by <a href="https://x402.org" target="_blank">x402 Protocol</a> • 
-      Built on <a href="https://base.org" target="_blank">Base</a> • 
-      <a href="https://github.com/lobsterbar2027-boop/crypto-sentiment-api" target="_blank">GitHub</a>
+      Built on <a href="https://base.org" target="_blank">Base</a>
     </footer>
   </div>
 
   <script>
-    const API_BASE = '';
     const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
     let userAddress = null;
 
@@ -455,13 +248,12 @@ app.get('/', (req, res) => {
       const walletInfo = document.getElementById('walletInfo');
       
       if (!window.ethereum) {
-        statusEl.innerHTML = '<div class="status error">MetaMask not found! Please install it.</div>';
+        statusEl.innerHTML = '<div class="status error">MetaMask not found!</div>';
         return;
       }
 
       try {
         statusEl.innerHTML = '<div class="status pending">Connecting...</div>';
-        
         const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
         userAddress = accounts[0];
         
@@ -469,32 +261,21 @@ app.get('/', (req, res) => {
         if (chainId !== '0x2105') {
           statusEl.innerHTML = '<div class="status pending">Switching to Base...</div>';
           try {
-            await window.ethereum.request({
-              method: 'wallet_switchEthereumChain',
-              params: [{ chainId: '0x2105' }],
-            });
+            await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x2105' }] });
           } catch (e) {
             if (e.code === 4902) {
               await window.ethereum.request({
                 method: 'wallet_addEthereumChain',
-                params: [{
-                  chainId: '0x2105',
-                  chainName: 'Base',
-                  nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-                  rpcUrls: ['https://mainnet.base.org'],
-                  blockExplorerUrls: ['https://basescan.org'],
-                }],
+                params: [{ chainId: '0x2105', chainName: 'Base', nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 }, rpcUrls: ['https://mainnet.base.org'], blockExplorerUrls: ['https://basescan.org'] }]
               });
             }
           }
         }
 
         const balance = await getUSDCBalance(userAddress);
-        
         document.getElementById('walletAddress').textContent = userAddress.slice(0, 6) + '...' + userAddress.slice(-4);
         document.getElementById('usdcBalance').textContent = '$' + balance.toFixed(4);
         walletInfo.style.display = 'block';
-        
         connectBtn.style.display = 'none';
         payBtn.style.display = 'block';
         
@@ -504,7 +285,6 @@ app.get('/', (req, res) => {
         } else {
           statusEl.innerHTML = '<div class="status success">Ready to pay!</div>';
         }
-        
       } catch (error) {
         statusEl.innerHTML = '<div class="status error">' + error.message + '</div>';
       }
@@ -512,10 +292,7 @@ app.get('/', (req, res) => {
 
     async function getUSDCBalance(address) {
       const data = '0x70a08231000000000000000000000000' + address.slice(2);
-      const result = await window.ethereum.request({
-        method: 'eth_call',
-        params: [{ to: USDC_ADDRESS, data }, 'latest'],
-      });
+      const result = await window.ethereum.request({ method: 'eth_call', params: [{ to: USDC_ADDRESS, data }, 'latest'] });
       return parseInt(result, 16) / 1e6;
     }
 
@@ -525,14 +302,15 @@ app.get('/', (req, res) => {
       const payBtn = document.getElementById('payBtn');
       const resultBox = document.getElementById('resultBox');
       const resultEl = document.getElementById('result');
-      
-      const API_URL = API_BASE + '/v1/sentiment/' + coin;
+      const API_URL = '/v1/sentiment/' + coin;
       
       payBtn.disabled = true;
       statusEl.innerHTML = '<div class="status pending">🔄 Getting payment requirements...</div>';
 
       try {
+        // Step 1: Get 402 response
         const res1 = await fetch(API_URL);
+        console.log('Initial response status:', res1.status);
         
         if (res1.status !== 402) {
           if (res1.ok) {
@@ -546,26 +324,39 @@ app.get('/', (req, res) => {
           throw new Error('Unexpected: ' + res1.status);
         }
 
-        const header = res1.headers.get('payment-required');
-        if (!header) throw new Error('No payment-required header');
+        // Get payment requirements from header
+        const header = res1.headers.get('x-payment-required') || res1.headers.get('payment-required');
+        console.log('Payment header:', header);
+        
+        if (!header) {
+          const body = await res1.json();
+          console.log('402 body:', body);
+          throw new Error('No payment header found');
+        }
         
         const requirements = JSON.parse(atob(header));
+        console.log('Payment requirements:', requirements);
+        
         const accept = requirements.accepts[0];
+        console.log('Using accept:', accept);
         
         statusEl.innerHTML = '<div class="status pending">🔄 Sign payment in MetaMask...</div>';
 
+        // Step 2: Create and sign payment
         const deadline = Math.floor(Date.now() / 1000) + 300;
-        const nonce = '0x' + Date.now().toString(16).padStart(64, '0');
+        const nonce = '0x' + Array.from(crypto.getRandomValues(new Uint8Array(32))).map(b => b.toString(16).padStart(2, '0')).join('');
         
+        // EIP-712 domain for USDC on Base
         const domain = {
-          name: accept.extra?.name || 'USDC',
-          version: accept.extra?.version || '2',
+          name: 'USD Coin',
+          version: '2',
           chainId: 8453,
           verifyingContract: USDC_ADDRESS,
         };
 
+        // IMPORTANT: Use TransferWithAuthorization (EIP-3009)
         const types = {
-          ReceiveWithAuthorization: [
+          TransferWithAuthorization: [
             { name: 'from', type: 'address' },
             { name: 'to', type: 'address' },
             { name: 'value', type: 'uint256' },
@@ -578,27 +369,32 @@ app.get('/', (req, res) => {
         const message = {
           from: userAddress,
           to: accept.payTo,
-          value: accept.amount,
+          value: accept.maxAmountRequired || accept.amount,
           validAfter: 0,
           validBefore: deadline,
           nonce: nonce,
         };
 
+        console.log('Signing message:', message);
+
         const signature = await window.ethereum.request({
           method: 'eth_signTypedData_v4',
-          params: [userAddress, JSON.stringify({ domain, types, primaryType: 'ReceiveWithAuthorization', message })],
+          params: [userAddress, JSON.stringify({ domain, types, primaryType: 'TransferWithAuthorization', message })],
         });
 
+        console.log('Signature:', signature);
+
+        // Build payment payload (x402 v1 format)
         const payment = {
-          x402Version: 2,
+          x402Version: 1,
           scheme: 'exact',
           network: accept.network,
           payload: {
-            signature,
+            signature: signature,
             authorization: {
               from: userAddress,
               to: accept.payTo,
-              value: accept.amount,
+              value: (accept.maxAmountRequired || accept.amount).toString(),
               validAfter: '0',
               validBefore: deadline.toString(),
               nonce: nonce,
@@ -606,34 +402,48 @@ app.get('/', (req, res) => {
           },
         };
 
+        console.log('Payment payload:', payment);
+
         statusEl.innerHTML = '<div class="status pending">🔄 Submitting payment...</div>';
 
+        // Step 3: Send request with payment
+        const encodedPayment = btoa(JSON.stringify(payment));
+
         const res2 = await fetch(API_URL, {
-          headers: { 'X-PAYMENT': btoa(JSON.stringify(payment)) },
+          headers: { 'X-PAYMENT': encodedPayment },
         });
+
+        console.log('Payment response status:', res2.status);
 
         if (res2.ok) {
           const data = await res2.json();
           resultEl.textContent = JSON.stringify(data, null, 2);
           resultBox.style.display = 'block';
           
-          const paymentRes = res2.headers.get('payment-response');
+          const paymentRes = res2.headers.get('x-payment-response') || res2.headers.get('payment-response');
           if (paymentRes) {
-            const decoded = JSON.parse(atob(paymentRes));
-            if (decoded.transaction) {
-              statusEl.innerHTML = '<div class="status success">✅ Success! <a href="https://basescan.org/tx/' + decoded.transaction + '" target="_blank" style="color:#86efac">View on BaseScan →</a></div>';
-            } else {
+            try {
+              const decoded = JSON.parse(atob(paymentRes));
+              if (decoded.transaction || decoded.txHash) {
+                const txHash = decoded.transaction || decoded.txHash;
+                statusEl.innerHTML = '<div class="status success">✅ Success! <a href="https://basescan.org/tx/' + txHash + '" target="_blank" style="color:#86efac">View on BaseScan →</a></div>';
+              } else {
+                statusEl.innerHTML = '<div class="status success">✅ Payment successful!</div>';
+              }
+            } catch (e) {
               statusEl.innerHTML = '<div class="status success">✅ Payment successful!</div>';
             }
           } else {
             statusEl.innerHTML = '<div class="status success">✅ Got response!</div>';
           }
         } else {
-          throw new Error('Failed: ' + res2.status);
+          const errorText = await res2.text();
+          console.log('Error response:', errorText);
+          throw new Error('Payment rejected: ' + res2.status + ' - ' + errorText);
         }
         
       } catch (error) {
-        console.error(error);
+        console.error('Payment error:', error);
         statusEl.innerHTML = '<div class="status error">❌ ' + error.message + '</div>';
       }
       
@@ -651,56 +461,114 @@ app.get('/', (req, res) => {
   res.send(html);
 });
 
-// ============================================
-// JSON API INFO (moved to /api)
-// ============================================
+// JSON API INFO
 app.get('/api', (req, res) => {
   res.json({
     name: 'CryptoSentiment API',
     version: '2.1.0',
-    description: 'AI-powered Reddit sentiment analysis for cryptocurrencies',
-    network: `${NETWORK_NAME} (${NETWORK})`,
-    price: '$0.03 USDC per query',
+    network: NETWORK_NAME,
+    price: '$0.03 USDC',
     supportedCoins: Object.keys(CRYPTO_SUBREDDITS),
-    endpoints: {
-      'GET /v1/sentiment/:coin': { description: 'Get sentiment', price: '$0.03 USDC', protected: true },
-      'GET /health': { description: 'Health check', protected: false },
-      'GET /api': { description: 'API info (JSON)', protected: false },
-    }
   });
 });
 
-// ============================================
 // HEALTH CHECK
-// ============================================
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
-    version: '2.1.0',
     network: NETWORK_NAME,
     wallet: WALLET_ADDRESS,
     paymentsReceived: paymentLog.length,
-    totalRevenue: `$${(paymentLog.length * 0.03).toFixed(2)}`
+    totalRevenue: '$' + (paymentLog.length * 0.03).toFixed(2)
   });
 });
 
 // ============================================
-// x402 Payment Middleware
+// x402 PAYMENT MIDDLEWARE - V2 SCHEMA COMPLIANT
 // ============================================
-console.log('🔧 Applying payment middleware...');
+console.log('🔧 Applying x402scan V2 compliant payment middleware...');
 
 app.use(
   paymentMiddleware(
     {
       'GET /v1/sentiment/*': {
+        // x402scan V2 compliant accepts configuration
         accepts: {
           scheme: 'exact',
-          price: '$0.03',
-          network: NETWORK,
+          network: NETWORK,                    // CAIP-2 format: "eip155:8453"
+          asset: USDC_ADDRESS,                 // Required: USDC contract address
+          maxTimeoutSeconds: 60,               // Required: payment timeout
           payTo: WALLET_ADDRESS,
+          price: '$0.03',                      // Will be converted to "amount" in base units
+          extra: {                             // Required in V2
+            name: 'USD Coin',
+            version: '2',
+          },
         },
-        description: 'Get AI-powered Reddit sentiment analysis for any cryptocurrency',
-        mimeType: 'application/json',
+        // x402scan V2 resource object
+        resource: {
+          url: `${API_BASE_URL}/v1/sentiment/:coin`,
+          description: 'Get AI-powered Reddit sentiment analysis for any cryptocurrency',
+          mimeType: 'application/json',
+        },
+        // Bazaar extension for x402scan UI
+        extensions: {
+          bazaar: {
+            info: {
+              input: {
+                coin: 'BTC',
+                description: 'Cryptocurrency symbol (BTC, ETH, SOL, DOGE, XRP, ADA, etc.)',
+              },
+              output: {
+                coin: 'BTC',
+                timestamp: '2025-01-20T12:00:00.000Z',
+                source: 'Reddit',
+                overall: {
+                  sentiment: 'bullish',
+                  score: 0.35,
+                  confidence: 0.7,
+                  postsAnalyzed: 20,
+                },
+                samplePosts: [
+                  { title: 'Example post title', subreddit: 'bitcoin', sentiment: 'bullish', score: 0.5 }
+                ],
+                payment: { network: 'Base Mainnet', amount: '0.03 USDC', status: 'confirmed' },
+              },
+            },
+            schema: {
+              input: {
+                type: 'object',
+                properties: {
+                  coin: {
+                    type: 'string',
+                    enum: ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP', 'ADA', 'MATIC', 'DOT', 'LINK', 'AVAX'],
+                    description: 'Cryptocurrency symbol',
+                  },
+                },
+                required: ['coin'],
+              },
+              output: {
+                type: 'object',
+                properties: {
+                  coin: { type: 'string' },
+                  timestamp: { type: 'string', format: 'date-time' },
+                  source: { type: 'string' },
+                  overall: {
+                    type: 'object',
+                    properties: {
+                      sentiment: { type: 'string', enum: ['bullish', 'bearish', 'neutral'] },
+                      score: { type: 'number' },
+                      confidence: { type: 'number' },
+                      postsAnalyzed: { type: 'integer' },
+                    },
+                  },
+                  samplePosts: { type: 'array' },
+                  payment: { type: 'object' },
+                },
+              },
+            },
+          },
+        },
       },
     },
     resourceServer,
@@ -708,13 +576,11 @@ app.use(
   ),
 );
 
-console.log('✅ Payment middleware applied');
+console.log('✅ x402scan V2 compliant payment middleware applied');
 
-// ============================================
-// PROTECTED SENTIMENT ROUTE
-// ============================================
+// PROTECTED ROUTE
 app.get('/v1/sentiment/:coin', async (req, res) => {
-  console.log(`📊 Processing request for ${req.params.coin}`);
+  console.log('📊 Processing paid request for', req.params.coin);
 
   try {
     const coin = req.params.coin.toUpperCase();
@@ -724,44 +590,24 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
     const analyzedPosts = [];
     
     posts.slice(0, 20).forEach(post => {
-      const text = `${post.title} ${post.selftext}`;
+      const text = post.title + ' ' + post.selftext;
       const result = analyzeSentiment(text);
       overallSentiment.score += result.score;
       overallSentiment.count++;
-      
-      analyzedPosts.push({
-        title: post.title.substring(0, 100),
-        subreddit: post.subreddit,
-        sentiment: result.label,
-        score: result.score
-      });
+      analyzedPosts.push({ title: post.title.substring(0, 100), subreddit: post.subreddit, sentiment: result.label, score: result.score });
     });
 
     const avgScore = overallSentiment.count > 0 ? overallSentiment.score / overallSentiment.count : 0;
+    let overallLabel = avgScore > 0.2 ? 'bullish' : avgScore < -0.2 ? 'bearish' : 'neutral';
 
-    let overallLabel;
-    if (avgScore > 0.2) overallLabel = 'bullish';
-    else if (avgScore < -0.2) overallLabel = 'bearish';
-    else overallLabel = 'neutral';
-
-    paymentLog.push({
-      timestamp: new Date().toISOString(),
-      amount: '0.03',
-      coin,
-      network: NETWORK_NAME
-    });
+    paymentLog.push({ timestamp: new Date().toISOString(), amount: '0.03', coin, network: NETWORK_NAME });
     console.log('💰 PAYMENT CONFIRMED');
 
     res.json({
       coin,
       timestamp: new Date().toISOString(),
       source: 'Reddit',
-      overall: {
-        sentiment: overallLabel,
-        score: parseFloat(avgScore.toFixed(4)),
-        confidence: Math.min(Math.abs(avgScore) * 2, 1),
-        postsAnalyzed: overallSentiment.count
-      },
+      overall: { sentiment: overallLabel, score: parseFloat(avgScore.toFixed(4)), confidence: Math.min(Math.abs(avgScore) * 2, 1), postsAnalyzed: overallSentiment.count },
       samplePosts: analyzedPosts.slice(0, 5),
       payment: { network: NETWORK_NAME, amount: '0.03 USDC', status: 'confirmed' }
     });
@@ -773,19 +619,14 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
 
 // Admin
 app.get('/admin/payments', (req, res) => {
-  if (req.headers['x-admin-key'] !== process.env.ADMIN_KEY) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  res.json({ totalPayments: paymentLog.length, totalRevenue: `$${(paymentLog.length * 0.03).toFixed(2)}`, payments: paymentLog });
+  if (req.headers['x-admin-key'] !== process.env.ADMIN_KEY) return res.status(401).json({ error: 'Unauthorized' });
+  res.json({ totalPayments: paymentLog.length, totalRevenue: '$' + (paymentLog.length * 0.03).toFixed(2), payments: paymentLog });
 });
 
 // Start
-console.log('\\n======================================================================');
-console.log('🚀 CryptoSentiment API - x402 v2 MAINNET');
-console.log('======================================================================');
-console.log(`📡 Server: http://localhost:${PORT}`);
-console.log(`🌐 Network: ${NETWORK}`);
-console.log(`💵 Price: $0.03 USDC`);
-console.log('======================================================================\\n');
+console.log('🚀 CryptoSentiment API - x402 v2 MAINNET (x402scan V2 compliant)');
+console.log('📡 Server: http://localhost:' + PORT);
+console.log('🌐 Network:', NETWORK);
+console.log('💵 Price: $0.03 USDC');
 
-app.listen(PORT, () => console.log(`✨ Server running on port ${PORT}`));
+app.listen(PORT, () => console.log('✨ Server running on port ' + PORT));
