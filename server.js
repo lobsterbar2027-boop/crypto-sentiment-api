@@ -1,35 +1,40 @@
 import express from "express";
 import "dotenv/config";
 
-import {
-  createX402Middleware,
-  exact
-} from "@coinbase/x402/express";
+import { createFacilitatorConfig } from "@coinbase/x402";
+import { createExpressMiddleware } from "@x402/http/express";
+import { exact } from "@x402/core";
 
 const app = express();
 
+// x402 Express middleware
 app.use(
-  createX402Middleware({
-    facilitatorUrl: process.env.FACILITATOR_URL,
-    chainId: Number(process.env.CHAIN_ID),
-    paymentScheme: exact({
-      amount: "1000000000000000", // 0.001 ETH
-      asset: "ETH"
-    })
+  createExpressMiddleware({
+    facilitator: createFacilitatorConfig(),
+    routes: [
+      {
+        method: "GET",
+        path: "/paid",
+        paymentRequirements: exact({
+          asset: "ETH",
+          amount: "1000000000000000" // 0.001 ETH
+        })
+      }
+    ]
   })
 );
+
+app.get("/", (req, res) => {
+  res.send("x402 v2 server running");
+});
 
 app.get("/paid", (req, res) => {
   res.json({
     success: true,
-    message: "Payment received via x402 ⚡"
+    message: "Payment verified & settled via x402 v2"
   });
 });
 
-app.get("/", (req, res) => {
-  res.send("x402 server running");
-});
-
 app.listen(3000, () => {
-  console.log("x402 server running on port 3000");
+  console.log("Server running on port 3000");
 });
