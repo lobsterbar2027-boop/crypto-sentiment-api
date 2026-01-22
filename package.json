@@ -1,7 +1,6 @@
 {
   "name": "x402-express-app",
   "version": "1.0.0",
-  "private": true,
   "type": "module",
   "scripts": {
     "start": "node server.js"
@@ -9,7 +8,8 @@
   "dependencies": {
     "express": "^4.19.2",
     "dotenv": "^16.4.5",
-    "viem": "^2.21.0",
-    "@coinbase/x402": "github:coinbase/x402"
+    "@coinbase/x402": "github:coinbase/x402",
+    "@x402/core": "github:coinbase/x402",
+    "@x402/http": "github:coinbase/x402"
   }
 }
