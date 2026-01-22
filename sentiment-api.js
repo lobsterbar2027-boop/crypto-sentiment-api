@@ -1,53 +1,66 @@
-// Crypto Sentiment API with x402 Payment Protocol
-// Uses the official x402-express middleware with built-in paywall
+// Crypto Sentiment API with x402 Payment Protocol v2
+// Uses official @x402 packages - Base Mainnet only
 import express from 'express';
 import cors from 'cors';
 
-// Use the simpler x402-express package which has built-in paywall
-import { paymentMiddleware } from 'x402-express';
+// Official x402 v2 imports
+import { paymentMiddleware } from '@x402/express';
+import { x402ResourceServer, HTTPFacilitatorClient } from '@x402/core/server';
+import { registerExactEvmScheme } from '@x402/evm/exact/server';
 
 const app = express();
 const PORT = process.env.PORT || 4021;
 
 // Your wallet address to receive payments
-const evmAddress = process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f';
+const payTo = process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f';
 
-// Use CDP mainnet facilitator for Base mainnet
-const facilitator = {
+// Base Mainnet (CAIP-2 format)
+const NETWORK = 'eip155:8453';
+
+// CDP Facilitator for Base Mainnet
+const facilitatorClient = new HTTPFacilitatorClient({
   url: 'https://api.cdp.coinbase.com/platform/v2/x402',
-};
+});
 
-// Enable CORS
+// Create resource server and register EVM scheme
+const server = new x402ResourceServer(facilitatorClient);
+registerExactEvmScheme(server);
+
+// Enable CORS and JSON parsing
 app.use(cors());
 app.use(express.json());
 
+// Trust proxy for Railway/Heroku deployments
+app.set('trust proxy', 1);
+
 console.log('============================================');
-console.log('🚀 Crypto Sentiment API with x402 Paywall');
+console.log('🚀 Crypto Sentiment API with x402 v2 Paywall');
 console.log('============================================');
-console.log('💰 Receiving wallet:', evmAddress);
+console.log('💰 Receiving wallet:', payTo);
 console.log('🌐 Network: Base Mainnet (eip155:8453)');
 console.log('💵 Price: $0.03 USDC per request');
 console.log('============================================');
 
 // ============================================
-// x402 PAYMENT MIDDLEWARE WITH BUILT-IN PAYWALL
+// x402 v2 PAYMENT MIDDLEWARE
 // ============================================
-// The x402-express middleware automatically serves a paywall UI
-// when browsers access protected routes without payment
 app.use(
   paymentMiddleware(
-    evmAddress,
     {
       'GET /v1/sentiment/:coin': {
-        price: '$0.03',
-        network: 'base',  // Base mainnet
-        config: {
-          description: 'Get AI-powered Reddit sentiment analysis for any cryptocurrency',
-          mimeType: 'application/json',
-        },
+        accepts: [
+          {
+            scheme: 'exact',
+            price: '$0.03',
+            network: NETWORK,
+            payTo,
+          },
+        ],
+        description: 'Get AI-powered Reddit sentiment analysis for any cryptocurrency',
+        mimeType: 'application/json',
       },
     },
-    facilitator,
+    server,
   ),
 );
 
@@ -69,7 +82,7 @@ app.get('/', (req, res) => {
     h1 { font-size: 2.5rem; margin-bottom: 10px; background: linear-gradient(90deg, #00d4ff, #0099ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
     .subtitle { color: #888; margin-bottom: 30px; }
     .card { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 25px; margin-bottom: 20px; }
-    .badge { display: inline-block; background: #0066ff; color: white; padding: 4px 12px; border-radius: 20px; font-size: 0.85rem; margin-bottom: 15px; }
+    .badge { display: inline-block; background: #10b981; color: white; padding: 4px 12px; border-radius: 20px; font-size: 0.85rem; margin-bottom: 15px; }
     .price { font-size: 1.5rem; color: #00d4ff; font-weight: bold; }
     .endpoint { background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; margin: 15px 0; font-family: monospace; }
     .method { color: #4ade80; font-weight: bold; }
@@ -85,7 +98,7 @@ app.get('/', (req, res) => {
 <body>
   <div class="container">
     <h1>🔮 Crypto Sentiment API</h1>
-    <p class="subtitle">AI-powered Reddit sentiment analysis • x402 Protocol</p>
+    <p class="subtitle">AI-powered Reddit sentiment analysis • x402 Protocol v2</p>
     
     <div class="card">
       <span class="badge">Base Mainnet • USDC</span>
@@ -104,6 +117,9 @@ app.get('/', (req, res) => {
         <span class="coin">DOGE</span>
         <span class="coin">XRP</span>
         <span class="coin">ADA</span>
+        <span class="coin">AVAX</span>
+        <span class="coin">MATIC</span>
+        <span class="coin">LINK</span>
       </div>
       
       <a href="/v1/sentiment/BTC" class="try-btn">Try it → Pay $0.03</a>
@@ -144,9 +160,9 @@ app.get('/', (req, res) => {
 // ============================================
 app.get('/v1/sentiment/:coin', async (req, res) => {
   const coin = req.params.coin.toUpperCase();
-  console.log(`💰 Paid request for ${coin} sentiment`);
+  console.log(`💰 Paid request received for ${coin} sentiment`);
 
-  // Generate sentiment analysis
+  // Generate sentiment analysis (demo data)
   const sentiments = ['very bullish', 'bullish', 'neutral', 'bearish', 'very bearish'];
   const sentiment = sentiments[Math.floor(Math.random() * sentiments.length)];
   const score = (Math.random() * 2 - 1).toFixed(3);
@@ -161,6 +177,11 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
     subreddits: ['cryptocurrency', 'bitcoin', 'ethtrader', 'altcoin'],
     timestamp: new Date().toISOString(),
     topKeywords: ['moon', 'hodl', 'bullish', 'dip', 'accumulate'].slice(0, 3 + Math.floor(Math.random() * 3)),
+    payment: {
+      network: 'Base Mainnet',
+      amount: '$0.03 USDC',
+      status: 'confirmed',
+    },
   };
 
   res.json(response);
@@ -173,17 +194,17 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    version: '2.0.0',
+    version: '2.1.0',
   });
 });
 
 app.get('/api', (req, res) => {
   res.json({
     name: 'Crypto Sentiment API',
-    version: '2.0.0',
+    version: '2.1.0',
     payment: {
       protocol: 'x402',
-      network: 'base',
+      network: 'Base Mainnet',
       price: '$0.03 USDC',
     },
     endpoints: {
@@ -192,6 +213,17 @@ app.get('/api', (req, res) => {
         description: 'Get AI-powered Reddit sentiment analysis',
         price: '$0.03 USDC',
         example: '/v1/sentiment/BTC',
+        protected: true,
+      },
+      '/health': {
+        method: 'GET',
+        description: 'Health check',
+        protected: false,
+      },
+      '/api': {
+        method: 'GET',
+        description: 'API information',
+        protected: false,
       },
     },
   });
@@ -204,6 +236,4 @@ app.listen(PORT, () => {
   console.log(`\n🌐 Server running on port ${PORT}`);
   console.log(`📍 Homepage: http://localhost:${PORT}`);
   console.log(`💳 Paid endpoint: http://localhost:${PORT}/v1/sentiment/BTC`);
-  console.log('\nWhen users access the paid endpoint in a browser,');
-  console.log('they will see the x402 paywall UI automatically!');
 });
