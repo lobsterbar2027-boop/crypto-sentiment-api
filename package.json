@@ -1,15 +1,21 @@
 {
-  "name": "x402-express-app",
-  "version": "1.0.0",
+  "name": "x402-sentiment-api",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   },
   "dependencies": {
-    "express": "^4.19.2",
+    "@coinbase/x402": "^0.1.4",
+    "@x402/core": "^2.0.0",
+    "@x402/evm": "^2.0.0",
+    "@x402/express": "^2.0.0",
+    "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "@coinbase/x402": "github:coinbase/x402",
-    "@x402/core": "github:coinbase/x402",
-    "@x402/http": "github:coinbase/x402"
+    "express": "^4.21.0"
   }
 }
