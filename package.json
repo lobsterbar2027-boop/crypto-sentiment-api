@@ -1,11 +1,11 @@
 {
   "name": "crypto-sentiment-api",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "type": "module",
   "description": "Real-time Reddit crypto sentiment API with x402 v2 payment protocol",
-  "main": "sentiment-api.js",
+  "main": "bootstrap.js",
   "scripts": {
-    "start": "node sentiment-api.js"
+    "start": "node bootstrap.js"
   },
   "dependencies": {
     "@coinbase/x402": "^2.1.0",
@@ -15,7 +15,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.18.2",
-    "sentiment": "^5.0.2"
+    "vader-sentiment": "^1.1.3"
   },
   "engines": {
     "node": ">=18"
