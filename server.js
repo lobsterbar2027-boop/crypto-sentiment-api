@@ -1,73 +1,58 @@
+import dotenv from "dotenv";
+dotenv.config();
 import express from "express";
 import cors from "cors";
-import "dotenv/config";
-
 import { paymentMiddleware } from "@x402/express";
 import { x402ResourceServer, HTTPFacilitatorClient } from "@x402/core/server";
 import { registerExactEvmScheme } from "@x402/evm/exact/server";
 import { createFacilitatorConfig } from "@coinbase/x402";
 
 // ==================================================
-// CONFIGURATION
+// APP SETUP
 // ==================================================
+const app = express();
 const PORT = process.env.PORT || 3000;
 const payTo = process.env.WALLET_ADDRESS;
-
-// Base Mainnet (CAIP-2 format)
 const NETWORK = "eip155:8453";
 
-// Validate required environment variables
 if (!payTo) {
-  console.error("❌ WALLET_ADDRESS environment variable is required");
-  process.exit(1);
-}
-
-if (!process.env.CDP_API_KEY_ID) {
-  console.error("❌ CDP_API_KEY_ID environment variable is required");
-  process.exit(1);
-}
-
-if (!process.env.CDP_API_KEY_SECRET) {
-  console.error("❌ CDP_API_KEY_SECRET environment variable is required");
+  console.error("❌ WALLET_ADDRESS missing");
   process.exit(1);
 }
 
 // ==================================================
-// FACILITATOR CLIENT (CDP MAINNET)
+// FACILITATOR (AUTHENTICATED)
 // ==================================================
-const facilitatorClient = new HTTPFacilitatorClient(createFacilitatorConfig());
+const facilitatorClient = new HTTPFacilitatorClient(
+  createFacilitatorConfig()
+);
 
 // ==================================================
 // RESOURCE SERVER
 // ==================================================
-const resourceServer = new x402ResourceServer(facilitatorClient);
-registerExactEvmScheme(resourceServer);
+const server = new x402ResourceServer(facilitatorClient);
+registerExactEvmScheme(server);
 
 // ==================================================
-// EXPRESS APP
+// MIDDLEWARE
 // ==================================================
-const app = express();
-
 app.use(cors());
 app.use(express.json());
 app.set("trust proxy", 1);
 
 // ==================================================
-// VERIFY FACILITATOR (FAIL FAST ON STARTUP)
+// VERIFY FACILITATOR SUPPORT (FAIL FAST)
 // ==================================================
-async function verifyFacilitator() {
-  try {
-    const supported = await facilitatorClient.getSupported();
-    console.log("✅ Facilitator connected. Supported:", JSON.stringify(supported, null, 2));
-    return true;
-  } catch (err) {
-    console.error("❌ Facilitator connection failed:", err.message);
-    return false;
-  }
+try {
+  const supported = await facilitatorClient.getSupported();
+  console.log("✅ Facilitator supports:", supported);
+} catch (err) {
+  console.error("❌ Facilitator auth failed", err);
+  process.exit(1);
 }
 
 // ==================================================
-// X402 PAYMENT MIDDLEWARE
+// x402 PAYMENT MIDDLEWARE
 // ==================================================
 app.use(
   paymentMiddleware(
@@ -78,31 +63,22 @@ app.use(
             scheme: "exact",
             network: NETWORK,
             price: "$0.03",
-            payTo,
-          },
+            payTo
+          }
         ],
         description: "AI-powered crypto sentiment analysis",
-        mimeType: "application/json",
-      },
+        mimeType: "application/json"
+      }
     },
-    resourceServer
+    server
   )
 );
 
 // ==================================================
 // ROUTES
 // ==================================================
-app.get("/", (req, res) => {
-  res.json({
-    service: "Crypto Sentiment API",
-    version: "2.0.0",
-    x402: true,
-    network: "Base Mainnet",
-    endpoints: {
-      sentiment: "/v1/sentiment/:coin",
-      health: "/health",
-    },
-  });
+app.get("/", (_, res) => {
+  res.send("🔮 Crypto Sentiment API (x402 enabled)");
 });
 
 app.get("/v1/sentiment/:coin", (req, res) => {
@@ -114,7 +90,7 @@ app.get("/v1/sentiment/:coin", (req, res) => {
     "bullish",
     "neutral",
     "bearish",
-    "very bearish",
+    "very bearish"
   ];
 
   res.json({
@@ -126,41 +102,27 @@ app.get("/v1/sentiment/:coin", (req, res) => {
     payment: {
       network: "Base Mainnet",
       amount: "$0.03 USDC",
-      status: "confirmed",
-    },
+      status: "confirmed"
+    }
   });
 });
 
-app.get("/health", (req, res) => {
-  res.json({
-    status: "ok",
-    timestamp: new Date().toISOString(),
-  });
+app.get("/health", (_, res) => {
+  res.json({ status: "ok" });
 });
 
 // ==================================================
 // START SERVER
 // ==================================================
-async function start() {
-  const facilitatorOk = await verifyFacilitator();
-  
-  if (!facilitatorOk) {
-    console.warn("⚠️  Starting server despite facilitator issues (payments may fail)");
-  }
-
-  app.listen(PORT, () => {
-    console.log(`
+app.listen(PORT, () => {
+  console.log(`
 ============================================
 🚀 Crypto Sentiment API (x402 v2)
 ============================================
-🌐 Network:    Base Mainnet (eip155:8453)
-💵 Price:      $0.03 USDC
-📍 Server:     http://localhost:${PORT}
-💳 Paid:       GET /v1/sentiment/:coin
-🏥 Health:     GET /health
+🌐 Network: Base Mainnet (eip155:8453)
+💵 Price: $0.03 USDC
+📍 Server: http://localhost:${PORT}
+💳 Paid endpoint: /v1/sentiment/BTC
 ============================================
-    `);
-  });
-}
-
-start();
+`);
+});
