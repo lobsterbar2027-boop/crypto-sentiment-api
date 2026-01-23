@@ -67,6 +67,11 @@ const facilitatorClient = new HTTPFacilitatorClient(createFacilitatorConfig());
 const resourceServer = new x402ResourceServer(facilitatorClient)
   .register(NETWORK, new ExactEvmScheme());
 
+// Paywall UI configuration (shows wallet connect modal for MetaMask, Coinbase, Phantom, etc.)
+const paywallConfig = {
+  appName: 'Crypto Sentiment API',
+};
+
 // Enable CORS and JSON parsing
 app.use(cors());
 app.use(express.json());
@@ -319,6 +324,7 @@ app.use(
       },
     },
     resourceServer,
+    paywallConfig,
   ),
 );
 
