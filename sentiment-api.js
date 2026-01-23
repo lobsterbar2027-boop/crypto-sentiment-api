@@ -1,12 +1,14 @@
 // Crypto Sentiment API with x402 Payment Protocol v2
-// Uses official @x402 packages - Base Mainnet
+// Using official @coinbase/x402 + @x402 packages for Base Mainnet
+import { config } from 'dotenv';
 import express from 'express';
 import cors from 'cors';
+import { paymentMiddleware, x402ResourceServer } from '@x402/express';
+import { ExactEvmScheme } from '@x402/evm/exact/server';
+import { HTTPFacilitatorClient } from '@x402/core/http';
+import { createFacilitatorConfig } from '@coinbase/x402';
 
-// Official x402 v2 imports
-import { paymentMiddleware } from '@x402/express';
-import { x402ResourceServer, HTTPFacilitatorClient } from '@x402/core/server';
-import { registerExactEvmScheme } from '@x402/evm/exact/server';
+config();
 
 const app = express();
 const PORT = process.env.PORT || 4021;
@@ -14,23 +16,28 @@ const PORT = process.env.PORT || 4021;
 // Your wallet address to receive payments
 const payTo = process.env.WALLET_ADDRESS || '0x48365516b2d74a3dfa621289e76507940466480f';
 
+// Validate CDP credentials
+if (!process.env.CDP_API_KEY_ID || !process.env.CDP_API_KEY_SECRET) {
+  console.error('❌ CDP_API_KEY_ID and CDP_API_KEY_SECRET environment variables are required');
+  console.error('   Get them from: https://portal.cdp.coinbase.com/projects');
+  process.exit(1);
+}
+
 // Base Mainnet (CAIP-2 format)
 const NETWORK = 'eip155:8453';
 
-// Use x402.org facilitator - works for mainnet without CDP auth
-const facilitatorClient = new HTTPFacilitatorClient({
-  url: 'https://facilitator.x402.org',
-});
+// Create facilitator client using CDP config (reads CDP_API_KEY_ID and CDP_API_KEY_SECRET from env)
+const facilitatorClient = new HTTPFacilitatorClient(createFacilitatorConfig());
 
-// Create resource server and register EVM scheme
-const server = new x402ResourceServer(facilitatorClient);
-registerExactEvmScheme(server);
+// Create resource server and register EVM scheme for Base Mainnet
+const resourceServer = new x402ResourceServer(facilitatorClient)
+  .register(NETWORK, new ExactEvmScheme());
 
 // Enable CORS and JSON parsing
 app.use(cors());
 app.use(express.json());
 
-// Trust proxy for Railway/Heroku deployments
+// Trust proxy for Railway deployments
 app.set('trust proxy', 1);
 
 console.log('============================================');
@@ -38,7 +45,7 @@ console.log('🚀 Crypto Sentiment API with x402 v2 Paywall');
 console.log('============================================');
 console.log('💰 Receiving wallet:', payTo);
 console.log('🌐 Network: Base Mainnet (eip155:8453)');
-console.log('🔗 Facilitator: https://facilitator.x402.org');
+console.log('🔗 Facilitator: CDP (Coinbase)');
 console.log('💵 Price: $0.03 USDC per request');
 console.log('============================================');
 
@@ -61,7 +68,7 @@ app.use(
         mimeType: 'application/json',
       },
     },
-    server,
+    resourceServer,
   ),
 );
 
