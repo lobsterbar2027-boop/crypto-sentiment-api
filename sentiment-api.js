@@ -67,11 +67,6 @@ const facilitatorClient = new HTTPFacilitatorClient(createFacilitatorConfig());
 const resourceServer = new x402ResourceServer(facilitatorClient)
   .register(NETWORK, new ExactEvmScheme());
 
-// Paywall UI configuration (shows wallet connect modal for MetaMask, Coinbase, Phantom, etc.)
-const paywallConfig = {
-  appName: 'Crypto Sentiment API',
-};
-
 // Enable CORS and JSON parsing
 app.use(cors());
 app.use(express.json());
@@ -324,12 +319,11 @@ app.use(
       },
     },
     resourceServer,
-    paywallConfig,
   ),
 );
 
 // ============================================
-// HOMEPAGE
+// HOMEPAGE WITH WALLET CONNECTION
 // ============================================
 app.get('/', (req, res) => {
   res.send(`
@@ -352,11 +346,24 @@ app.get('/', (req, res) => {
     .method { color: #4ade80; font-weight: bold; }
     .path { color: #fbbf24; }
     .coins { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 15px; }
-    .coin { background: rgba(255,255,255,0.1); padding: 8px 16px; border-radius: 20px; font-size: 0.9rem; }
-    .try-btn { display: inline-block; background: linear-gradient(90deg, #0066ff, #00d4ff); color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: bold; margin-top: 20px; }
-    .try-btn:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,102,255,0.4); }
+    .coin { background: rgba(255,255,255,0.1); padding: 8px 16px; border-radius: 20px; font-size: 0.9rem; cursor: pointer; transition: all 0.2s; }
+    .coin:hover, .coin.selected { background: rgba(0,212,255,0.3); border: 1px solid #00d4ff; }
+    .btn { display: inline-block; background: linear-gradient(90deg, #0066ff, #00d4ff); color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: bold; margin-top: 20px; border: none; cursor: pointer; font-size: 1rem; }
+    .btn:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,102,255,0.4); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .btn-secondary { background: linear-gradient(90deg, #10b981, #059669); }
     a { color: #00d4ff; }
     footer { text-align: center; margin-top: 40px; color: #666; }
+    #status { margin-top: 15px; padding: 15px; border-radius: 8px; display: none; }
+    #status.info { display: block; background: rgba(0,212,255,0.1); border: 1px solid #00d4ff; }
+    #status.success { display: block; background: rgba(16,185,129,0.1); border: 1px solid #10b981; }
+    #status.error { display: block; background: rgba(239,68,68,0.1); border: 1px solid #ef4444; color: #fca5a5; }
+    #result { margin-top: 20px; padding: 20px; background: rgba(0,0,0,0.3); border-radius: 8px; display: none; font-family: monospace; white-space: pre-wrap; max-height: 400px; overflow-y: auto; }
+    .wallet-info { display: flex; align-items: center; gap: 10px; margin-bottom: 15px; padding: 10px; background: rgba(16,185,129,0.1); border-radius: 8px; }
+    .wallet-info.disconnected { background: rgba(239,68,68,0.1); }
+    .wallet-address { font-family: monospace; font-size: 0.85rem; }
+    select { padding: 10px 15px; border-radius: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.2); color: white; font-size: 1rem; margin-right: 10px; }
+    .action-row { display: flex; align-items: center; gap: 15px; margin-top: 20px; flex-wrap: wrap; }
   </style>
 </head>
 <body>
@@ -369,24 +376,34 @@ app.get('/', (req, res) => {
       <p class="price">$0.03 per request</p>
       <p style="margin-top: 10px; color: #aaa;">Pay-per-use with your crypto wallet. No accounts, no subscriptions.</p>
       
+      <div id="walletInfo" class="wallet-info disconnected">
+        <span id="walletStatus">🔴 Wallet not connected</span>
+        <span id="walletAddress" class="wallet-address"></span>
+      </div>
+      
       <div class="endpoint">
         <span class="method">GET</span> <span class="path">/v1/sentiment/:coin</span>
       </div>
       
-      <p>Supported cryptocurrencies:</p>
-      <div class="coins">
-        ${Object.keys(CRYPTO_SUBREDDITS).map(coin => `<span class="coin">${coin}</span>`).join('\n        ')}
+      <p>Select a cryptocurrency:</p>
+      <div class="action-row">
+        <select id="coinSelect">
+          ${Object.keys(CRYPTO_SUBREDDITS).map(coin => '<option value="' + coin + '">' + coin + '</option>').join('')}
+        </select>
+        <button id="connectBtn" class="btn btn-secondary">Connect Wallet</button>
+        <button id="payBtn" class="btn" disabled>Pay $0.03 & Get Sentiment</button>
       </div>
       
-      <a href="/v1/sentiment/BTC" class="try-btn">Try it → Pay $0.03</a>
+      <div id="status"></div>
+      <pre id="result"></pre>
     </div>
     
     <div class="card">
       <h3>How it works</h3>
       <ol style="margin-top: 15px; padding-left: 20px; line-height: 1.8;">
-        <li>Click an endpoint or make an API request</li>
-        <li>Connect your wallet (MetaMask, Coinbase, etc.)</li>
-        <li>Sign the payment authorization</li>
+        <li>Connect your wallet (MetaMask, Coinbase Wallet, etc.)</li>
+        <li>Select a cryptocurrency to analyze</li>
+        <li>Click "Pay & Get Sentiment" - sign the $0.03 USDC authorization</li>
         <li>Get real-time Reddit sentiment analysis!</li>
       </ol>
     </div>
@@ -416,6 +433,285 @@ app.get('/', (req, res) => {
       Built on <a href="https://base.org" target="_blank">Base</a>
     </footer>
   </div>
+
+  <script>
+    // State
+    let userAddress = null;
+    let provider = null;
+    
+    // DOM elements
+    const connectBtn = document.getElementById('connectBtn');
+    const payBtn = document.getElementById('payBtn');
+    const coinSelect = document.getElementById('coinSelect');
+    const status = document.getElementById('status');
+    const result = document.getElementById('result');
+    const walletInfo = document.getElementById('walletInfo');
+    const walletStatus = document.getElementById('walletStatus');
+    const walletAddress = document.getElementById('walletAddress');
+    
+    // Base Mainnet chain ID
+    const BASE_CHAIN_ID = '0x2105'; // 8453 in hex
+    
+    // Update status message
+    function setStatus(message, type = 'info') {
+      status.textContent = message;
+      status.className = type;
+    }
+    
+    // Check if MetaMask or other wallet is available
+    function hasWallet() {
+      return typeof window.ethereum !== 'undefined';
+    }
+    
+    // Connect wallet
+    async function connectWallet() {
+      if (!hasWallet()) {
+        setStatus('Please install MetaMask or another Web3 wallet!', 'error');
+        return;
+      }
+      
+      try {
+        setStatus('Connecting wallet...', 'info');
+        
+        // Request accounts
+        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+        userAddress = accounts[0];
+        
+        // Check/switch to Base network
+        const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+        if (chainId !== BASE_CHAIN_ID) {
+          setStatus('Switching to Base network...', 'info');
+          try {
+            await window.ethereum.request({
+              method: 'wallet_switchEthereumChain',
+              params: [{ chainId: BASE_CHAIN_ID }],
+            });
+          } catch (switchError) {
+            // Chain not added, try to add it
+            if (switchError.code === 4902) {
+              await window.ethereum.request({
+                method: 'wallet_addEthereumChain',
+                params: [{
+                  chainId: BASE_CHAIN_ID,
+                  chainName: 'Base',
+                  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+                  rpcUrls: ['https://mainnet.base.org'],
+                  blockExplorerUrls: ['https://basescan.org'],
+                }],
+              });
+            } else {
+              throw switchError;
+            }
+          }
+        }
+        
+        // Update UI
+        walletInfo.className = 'wallet-info';
+        walletStatus.textContent = '🟢 Connected';
+        walletAddress.textContent = userAddress.slice(0, 6) + '...' + userAddress.slice(-4);
+        connectBtn.textContent = 'Connected ✓';
+        connectBtn.disabled = true;
+        payBtn.disabled = false;
+        setStatus('Wallet connected! Ready to pay.', 'success');
+        
+      } catch (error) {
+        console.error('Wallet connection error:', error);
+        setStatus('Failed to connect: ' + error.message, 'error');
+      }
+    }
+    
+    // Generate random nonce for EIP-3009
+    function generateNonce() {
+      const array = new Uint8Array(32);
+      crypto.getRandomValues(array);
+      return '0x' + Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+    
+    // Make payment and get sentiment
+    async function payAndGetSentiment() {
+      const coin = coinSelect.value;
+      
+      try {
+        payBtn.disabled = true;
+        setStatus('Fetching payment requirements...', 'info');
+        result.style.display = 'none';
+        
+        // Step 1: Make initial request to get 402 + payment requirements
+        const initialResponse = await fetch('/v1/sentiment/' + coin);
+        
+        // If we got 200, payment was somehow not required (shouldn't happen)
+        if (initialResponse.ok) {
+          const data = await initialResponse.json();
+          result.textContent = JSON.stringify(data, null, 2);
+          result.style.display = 'block';
+          setStatus('Got response (no payment required)', 'success');
+          payBtn.disabled = false;
+          return;
+        }
+        
+        // Check for 402 Payment Required
+        if (initialResponse.status !== 402) {
+          throw new Error('Unexpected response: ' + initialResponse.status);
+        }
+        
+        // Get payment requirements from header
+        const paymentRequiredHeader = initialResponse.headers.get('X-Payment') || 
+                                      initialResponse.headers.get('x-payment') ||
+                                      initialResponse.headers.get('Payment-Required') ||
+                                      initialResponse.headers.get('payment-required');
+        
+        if (!paymentRequiredHeader) {
+          throw new Error('No payment requirements in response headers');
+        }
+        
+        // Decode payment requirements
+        const requirements = JSON.parse(atob(paymentRequiredHeader));
+        console.log('Payment requirements:', requirements);
+        
+        // Get the first accepted payment option
+        const accepts = requirements.accepts[0];
+        if (!accepts) {
+          throw new Error('No accepted payment methods');
+        }
+        
+        setStatus('Preparing payment authorization...', 'info');
+        
+        // USDC contract on Base mainnet
+        const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+        
+        // Payment details
+        const payTo = accepts.payTo;
+        const amount = accepts.amount; // Already in atomic units (30000 for $0.03)
+        const validAfter = 0;
+        const validBefore = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
+        const nonce = generateNonce();
+        
+        // EIP-712 typed data for USDC TransferWithAuthorization (EIP-3009)
+        const typedData = {
+          types: {
+            EIP712Domain: [
+              { name: 'name', type: 'string' },
+              { name: 'version', type: 'string' },
+              { name: 'chainId', type: 'uint256' },
+              { name: 'verifyingContract', type: 'address' }
+            ],
+            TransferWithAuthorization: [
+              { name: 'from', type: 'address' },
+              { name: 'to', type: 'address' },
+              { name: 'value', type: 'uint256' },
+              { name: 'validAfter', type: 'uint256' },
+              { name: 'validBefore', type: 'uint256' },
+              { name: 'nonce', type: 'bytes32' }
+            ]
+          },
+          primaryType: 'TransferWithAuthorization',
+          domain: {
+            name: accepts.extra?.name || 'USD Coin',
+            version: accepts.extra?.version || '2',
+            chainId: 8453,
+            verifyingContract: accepts.asset || USDC_ADDRESS
+          },
+          message: {
+            from: userAddress,
+            to: payTo,
+            value: amount,
+            validAfter: validAfter,
+            validBefore: validBefore,
+            nonce: nonce
+          }
+        };
+        
+        setStatus('Please sign the payment in your wallet...', 'info');
+        
+        // Request signature from wallet
+        const signature = await window.ethereum.request({
+          method: 'eth_signTypedData_v4',
+          params: [userAddress, JSON.stringify(typedData)]
+        });
+        
+        console.log('Signature:', signature);
+        
+        setStatus('Payment signed! Sending request...', 'info');
+        
+        // Create payment payload
+        const paymentPayload = {
+          x402Version: 2,
+          scheme: 'exact',
+          network: accepts.network,
+          payload: {
+            signature: signature,
+            authorization: {
+              from: userAddress,
+              to: payTo,
+              value: amount,
+              validAfter: validAfter,
+              validBefore: validBefore,
+              nonce: nonce
+            }
+          }
+        };
+        
+        // Encode payment payload as base64
+        const paymentHeader = btoa(JSON.stringify(paymentPayload));
+        
+        // Step 2: Make request with payment
+        const paidResponse = await fetch('/v1/sentiment/' + coin, {
+          headers: {
+            'X-Payment': paymentHeader
+          }
+        });
+        
+        if (!paidResponse.ok) {
+          const errorText = await paidResponse.text();
+          throw new Error('Payment failed: ' + paidResponse.status + ' - ' + errorText);
+        }
+        
+        const data = await paidResponse.json();
+        result.textContent = JSON.stringify(data, null, 2);
+        result.style.display = 'block';
+        setStatus('✅ Payment successful! Here\\'s your sentiment analysis:', 'success');
+        
+      } catch (error) {
+        console.error('Payment error:', error);
+        setStatus('Error: ' + error.message, 'error');
+      } finally {
+        payBtn.disabled = false;
+      }
+    }
+    
+    // Event listeners
+    connectBtn.addEventListener('click', connectWallet);
+    payBtn.addEventListener('click', payAndGetSentiment);
+    
+    // Check if already connected
+    if (hasWallet() && window.ethereum.selectedAddress) {
+      userAddress = window.ethereum.selectedAddress;
+      walletInfo.className = 'wallet-info';
+      walletStatus.textContent = '🟢 Connected';
+      walletAddress.textContent = userAddress.slice(0, 6) + '...' + userAddress.slice(-4);
+      connectBtn.textContent = 'Connected ✓';
+      connectBtn.disabled = true;
+      payBtn.disabled = false;
+    }
+    
+    // Listen for account changes
+    if (hasWallet()) {
+      window.ethereum.on('accountsChanged', (accounts) => {
+        if (accounts.length === 0) {
+          userAddress = null;
+          walletInfo.className = 'wallet-info disconnected';
+          walletStatus.textContent = '🔴 Wallet not connected';
+          walletAddress.textContent = '';
+          connectBtn.textContent = 'Connect Wallet';
+          connectBtn.disabled = false;
+          payBtn.disabled = true;
+        } else {
+          userAddress = accounts[0];
+          walletAddress.textContent = userAddress.slice(0, 6) + '...' + userAddress.slice(-4);
+        }
+      });
+    }
+  </script>
 </body>
 </html>
   `);
