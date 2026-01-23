@@ -2,7 +2,7 @@
   "name": "crypto-sentiment-api",
   "version": "2.1.0",
   "type": "module",
-  "description": "AI-powered crypto sentiment API with x402 v2 payment protocol",
+  "description": "Real-time Reddit crypto sentiment API with x402 v2 payment protocol",
   "main": "sentiment-api.js",
   "scripts": {
     "start": "node sentiment-api.js"
@@ -14,7 +14,8 @@
     "@x402/evm": "^2.1.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "sentiment": "^5.0.2"
   },
   "engines": {
     "node": ">=18"
