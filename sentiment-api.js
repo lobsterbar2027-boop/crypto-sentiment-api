@@ -1,15 +1,10 @@
-// Node 18 crypto polyfill - MUST be at the top
-import { webcrypto } from 'node:crypto';
-if (!globalThis.crypto) {
-  globalThis.crypto = webcrypto;
-}
-
 // Crypto Sentiment API with x402 Payment Protocol v2
-// Actually scrapes Reddit for sentiment analysis
+// Note: This file is loaded by bootstrap.js which applies the crypto polyfill first
+
 import { config } from 'dotenv';
 import express from 'express';
 import cors from 'cors';
-import Sentiment from 'sentiment';
+import vaderSentiment from 'vader-sentiment';
 import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { HTTPFacilitatorClient } from '@x402/core/http';
@@ -18,7 +13,6 @@ import { createFacilitatorConfig } from '@coinbase/x402';
 config();
 
 const app = express();
-const sentiment = new Sentiment();
 const PORT = process.env.PORT || 4021;
 
 // Your wallet address to receive payments
@@ -34,20 +28,36 @@ if (!process.env.CDP_API_KEY_ID || !process.env.CDP_API_KEY_SECRET) {
 // Base Mainnet (CAIP-2 format)
 const NETWORK = 'eip155:8453';
 
-// Crypto-specific subreddits for better sentiment
+// Crypto-specific subreddits
 const CRYPTO_SUBREDDITS = {
-  BTC: ['bitcoin', 'BitcoinMarkets'],
-  ETH: ['ethereum', 'ethtrader', 'ethfinance'],
-  SOL: ['solana'],
-  DOGE: ['dogecoin'],
-  XRP: ['Ripple', 'XRP'],
-  ADA: ['cardano'],
-  AVAX: ['Avax'],
-  MATIC: ['maticnetwork', '0xPolygon'],
-  LINK: ['Chainlink'],
-  DOT: ['dot', 'Polkadot'],
-  SHIB: ['SHIBArmy'],
-  LTC: ['litecoin'],
+  BTC: ['bitcoin', 'BitcoinMarkets', 'CryptoCurrency'],
+  ETH: ['ethereum', 'ethtrader', 'ethfinance', 'CryptoCurrency'],
+  SOL: ['solana', 'CryptoCurrency'],
+  DOGE: ['dogecoin', 'CryptoCurrency'],
+  XRP: ['Ripple', 'XRP', 'CryptoCurrency'],
+  ADA: ['cardano', 'CryptoCurrency'],
+  AVAX: ['Avax', 'CryptoCurrency'],
+  MATIC: ['maticnetwork', '0xPolygon', 'CryptoCurrency'],
+  LINK: ['Chainlink', 'CryptoCurrency'],
+  DOT: ['dot', 'Polkadot', 'CryptoCurrency'],
+  SHIB: ['SHIBArmy', 'CryptoCurrency'],
+  LTC: ['litecoin', 'CryptoCurrency'],
+};
+
+// Full coin names for better search
+const COIN_NAMES = {
+  BTC: 'Bitcoin',
+  ETH: 'Ethereum',
+  SOL: 'Solana',
+  DOGE: 'Dogecoin',
+  XRP: 'Ripple',
+  ADA: 'Cardano',
+  AVAX: 'Avalanche',
+  MATIC: 'Polygon',
+  LINK: 'Chainlink',
+  DOT: 'Polkadot',
+  SHIB: 'Shiba',
+  LTC: 'Litecoin',
 };
 
 // Create facilitator client using CDP config
@@ -72,69 +82,137 @@ console.log('🌐 Network: Base Mainnet (eip155:8453)');
 console.log('🔗 Facilitator: CDP (Coinbase)');
 console.log('💵 Price: $0.03 USDC per request');
 console.log('📊 Data Source: Reddit');
+console.log('🧠 Sentiment: VADER');
 console.log('============================================');
 
 // ============================================
-// REDDIT SCRAPING FUNCTIONS
+// IMPROVED REDDIT SCRAPING
 // ============================================
-async function fetchRedditPosts(subreddit, limit = 25) {
-  try {
-    const url = `https://www.reddit.com/r/${subreddit}/hot.json?limit=${limit}`;
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'CryptoSentimentAPI/2.1.0',
-      },
-    });
 
-    if (!response.ok) {
-      console.log(`   Reddit returned ${response.status} for r/${subreddit}`);
-      return [];
-    }
-
-    const data = await response.json();
-    return data.data.children.map((child) => ({
-      title: child.data.title,
-      selftext: child.data.selftext || '',
-      score: child.data.score,
-      numComments: child.data.num_comments,
-      created: child.data.created_utc,
-      subreddit: child.data.subreddit,
-    }));
-  } catch (error) {
-    console.log(`   Error fetching r/${subreddit}:`, error.message);
-    return [];
-  }
+// Better headers to avoid Reddit blocking
+function getRedditHeaders() {
+  return {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json',
+    'Accept-Language': 'en-US,en;q=0.9',
+  };
 }
 
-async function searchReddit(query, limit = 25) {
-  try {
-    const url = `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&sort=hot&limit=${limit}`;
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'CryptoSentimentAPI/2.1.0',
-      },
-    });
+// Fetch from subreddit with retries
+async function fetchSubreddit(subreddit, limit = 50) {
+  const urls = [
+    `https://www.reddit.com/r/${subreddit}/hot.json?limit=${limit}&raw_json=1`,
+    `https://old.reddit.com/r/${subreddit}/hot.json?limit=${limit}`,
+    `https://www.reddit.com/r/${subreddit}/new.json?limit=${limit}&raw_json=1`,
+  ];
 
-    if (!response.ok) {
-      return [];
+  for (const url of urls) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+
+      const response = await fetch(url, {
+        headers: getRedditHeaders(),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (response.status === 429) {
+        console.log(`   Rate limited on r/${subreddit}, waiting...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        continue;
+      }
+
+      if (!response.ok) {
+        console.log(`   r/${subreddit} returned ${response.status}`);
+        continue;
+      }
+
+      const data = await response.json();
+      
+      if (!data?.data?.children) {
+        continue;
+      }
+
+      const posts = data.data.children
+        .filter(child => child.kind === 't3')
+        .map(child => ({
+          title: child.data.title || '',
+          selftext: child.data.selftext || '',
+          score: child.data.score || 0,
+          numComments: child.data.num_comments || 0,
+          created: child.data.created_utc,
+          subreddit: child.data.subreddit,
+          url: child.data.url,
+        }));
+
+      if (posts.length > 0) {
+        console.log(`   ✓ r/${subreddit}: ${posts.length} posts`);
+        return posts;
+      }
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        console.log(`   r/${subreddit} timed out`);
+      } else {
+        console.log(`   r/${subreddit} error: ${error.message}`);
+      }
     }
-
-    const data = await response.json();
-    return data.data.children.map((child) => ({
-      title: child.data.title,
-      selftext: child.data.selftext || '',
-      score: child.data.score,
-      numComments: child.data.num_comments,
-      created: child.data.created_utc,
-      subreddit: child.data.subreddit,
-    }));
-  } catch (error) {
-    console.log(`   Error searching Reddit:`, error.message);
-    return [];
   }
+
+  return [];
 }
 
-function analyzeSentiment(posts) {
+// Search Reddit
+async function searchReddit(query, limit = 50) {
+  const urls = [
+    `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&sort=hot&limit=${limit}&raw_json=1`,
+    `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&sort=new&limit=${limit}&raw_json=1`,
+  ];
+
+  for (const url of urls) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+
+      const response = await fetch(url, {
+        headers: getRedditHeaders(),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (!response.ok) continue;
+
+      const data = await response.json();
+      
+      if (!data?.data?.children) continue;
+
+      const posts = data.data.children
+        .filter(child => child.kind === 't3')
+        .map(child => ({
+          title: child.data.title || '',
+          selftext: child.data.selftext || '',
+          score: child.data.score || 0,
+          numComments: child.data.num_comments || 0,
+          created: child.data.created_utc,
+          subreddit: child.data.subreddit,
+        }));
+
+      if (posts.length > 0) {
+        console.log(`   ✓ Search "${query}": ${posts.length} posts`);
+        return posts;
+      }
+    } catch (error) {
+      console.log(`   Search error: ${error.message}`);
+    }
+  }
+
+  return [];
+}
+
+// VADER sentiment analysis (better for social media)
+function analyzeWithVader(posts, coin) {
   if (posts.length === 0) {
     return {
       sentiment: 'neutral',
@@ -142,61 +220,80 @@ function analyzeSentiment(posts) {
       confidence: 0,
       postsAnalyzed: 0,
       breakdown: { positive: 0, negative: 0, neutral: 0 },
+      topPosts: [],
     };
   }
 
+  // Filter posts that mention the coin
+  const coinName = COIN_NAMES[coin] || coin;
+  const relevantPosts = posts.filter(post => {
+    const text = `${post.title} ${post.selftext}`.toUpperCase();
+    return text.includes(coin) || text.includes(coinName.toUpperCase());
+  });
+
+  // If no relevant posts, use all posts from coin-specific subreddits
+  const postsToAnalyze = relevantPosts.length > 0 ? relevantPosts : posts;
+
   let totalScore = 0;
-  let breakdown = { positive: 0, negative: 0, neutral: 0 };
+  let totalWeight = 0;
+  const breakdown = { positive: 0, negative: 0, neutral: 0 };
   const analyzedPosts = [];
 
-  for (const post of posts) {
-    const text = `${post.title} ${post.selftext}`;
-    const result = sentiment.analyze(text);
+  for (const post of postsToAnalyze) {
+    const text = `${post.title} ${post.selftext}`.substring(0, 1000);
+    const intensity = vaderSentiment.SentimentIntensityAnalyzer.polarity_scores(text);
 
-    // Weight by engagement (upvotes + comments)
-    const engagement = Math.log(post.score + post.numComments + 1);
-    const weightedScore = result.comparative * engagement;
+    // Weight by engagement
+    const engagement = Math.log10(Math.max(post.score, 1) + Math.max(post.numComments, 1) + 1);
+    const weight = engagement;
 
-    totalScore += weightedScore;
+    totalScore += intensity.compound * weight;
+    totalWeight += weight;
 
-    if (result.comparative > 0.05) {
+    // Categorize
+    if (intensity.compound >= 0.05) {
       breakdown.positive++;
-    } else if (result.comparative < -0.05) {
+    } else if (intensity.compound <= -0.05) {
       breakdown.negative++;
     } else {
       breakdown.neutral++;
     }
 
     analyzedPosts.push({
-      title: post.title.substring(0, 100),
+      title: post.title.substring(0, 120),
       subreddit: post.subreddit,
-      sentimentScore: result.comparative.toFixed(3),
+      score: intensity.compound.toFixed(3),
       engagement: post.score,
     });
   }
 
-  const avgScore = totalScore / posts.length;
+  // Calculate weighted average
+  const avgScore = totalWeight > 0 ? totalScore / totalWeight : 0;
   const normalizedScore = Math.max(-1, Math.min(1, avgScore));
 
   // Determine sentiment label
   let sentimentLabel;
-  if (normalizedScore > 0.3) sentimentLabel = 'very bullish';
-  else if (normalizedScore > 0.1) sentimentLabel = 'bullish';
-  else if (normalizedScore < -0.3) sentimentLabel = 'very bearish';
-  else if (normalizedScore < -0.1) sentimentLabel = 'bearish';
+  if (normalizedScore >= 0.5) sentimentLabel = 'very bullish';
+  else if (normalizedScore >= 0.15) sentimentLabel = 'bullish';
+  else if (normalizedScore <= -0.5) sentimentLabel = 'very bearish';
+  else if (normalizedScore <= -0.15) sentimentLabel = 'bearish';
   else sentimentLabel = 'neutral';
 
-  // Calculate confidence based on sample size and agreement
+  // Confidence based on sample size and agreement
+  const total = breakdown.positive + breakdown.negative + breakdown.neutral;
   const maxCategory = Math.max(breakdown.positive, breakdown.negative, breakdown.neutral);
-  const agreement = maxCategory / posts.length;
-  const sampleSizeBonus = Math.min(posts.length / 50, 1) * 0.3;
-  const confidence = Math.min((agreement * 0.7 + sampleSizeBonus), 0.95);
+  const agreement = total > 0 ? maxCategory / total : 0;
+  const sampleBonus = Math.min(total / 30, 1) * 0.25;
+  const confidence = Math.min(agreement * 0.75 + sampleBonus, 0.95);
+
+  // Sort by engagement for top posts
+  analyzedPosts.sort((a, b) => b.engagement - a.engagement);
 
   return {
     sentiment: sentimentLabel,
     score: parseFloat(normalizedScore.toFixed(3)),
     confidence: parseFloat(confidence.toFixed(2)),
-    postsAnalyzed: posts.length,
+    postsAnalyzed: postsToAnalyze.length,
     breakdown,
     topPosts: analyzedPosts.slice(0, 5),
   };
@@ -217,7 +314,7 @@ app.use(
             payTo,
           },
         ],
-        description: 'Get AI-powered Reddit sentiment analysis for any cryptocurrency',
+        description: 'Get real-time Reddit sentiment analysis for any cryptocurrency',
         mimeType: 'application/json',
       },
     },
@@ -291,10 +388,10 @@ app.get('/', (req, res) => {
     <div class="card">
       <h3>What you get</h3>
       <ul style="margin-top: 15px; padding-left: 20px; line-height: 1.8;">
-        <li>Sentiment from coin-specific subreddits (r/bitcoin, r/ethereum, etc.)</li>
-        <li>Engagement-weighted sentiment scoring</li>
-        <li>Confidence levels based on sample size</li>
-        <li>Top posts driving the sentiment</li>
+        <li>VADER sentiment analysis (optimized for social media)</li>
+        <li>Engagement-weighted scoring</li>
+        <li>Multiple subreddits per coin</li>
+        <li>Top posts driving sentiment</li>
       </ul>
     </div>
     
@@ -320,54 +417,61 @@ app.get('/', (req, res) => {
 
 // ============================================
 // PROTECTED ENDPOINT - Requires x402 Payment
-// Actually scrapes Reddit!
 // ============================================
 app.get('/v1/sentiment/:coin', async (req, res) => {
   const coin = req.params.coin.toUpperCase();
-  console.log(`💰 Paid request received for ${coin} sentiment`);
+  const coinName = COIN_NAMES[coin] || coin;
+  
+  console.log(`\n💰 Processing request for ${coin} (${coinName}) sentiment`);
 
-  // Fetch from coin-specific subreddits
-  const subreddits = CRYPTO_SUBREDDITS[coin] || [];
+  const subreddits = CRYPTO_SUBREDDITS[coin] || ['CryptoCurrency'];
   const subredditsScanned = [];
   let allPosts = [];
 
-  // Fetch from dedicated subreddits
+  // Fetch from each subreddit
   for (const sub of subreddits) {
-    console.log(`   Fetching r/${sub}...`);
-    const posts = await fetchRedditPosts(sub, 25);
-    allPosts = allPosts.concat(posts);
+    // Add small delay between requests to avoid rate limiting
+    if (allPosts.length > 0) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    const posts = await fetchSubreddit(sub, 50);
     if (posts.length > 0) {
+      allPosts = allPosts.concat(posts);
       subredditsScanned.push(`r/${sub}`);
     }
   }
 
-  // Also search Reddit for the coin name
-  console.log(`   Searching Reddit for "${coin}"...`);
-  const searchPosts = await searchReddit(`${coin} crypto`, 25);
+  // Also search for the coin
+  await new Promise(resolve => setTimeout(resolve, 500));
+  const searchPosts = await searchReddit(`${coinName} crypto cryptocurrency`, 50);
   allPosts = allPosts.concat(searchPosts);
 
-  // Also check r/cryptocurrency
-  console.log(`   Fetching r/cryptocurrency...`);
-  const cryptoPosts = await fetchRedditPosts('cryptocurrency', 50);
-  const relevantPosts = cryptoPosts.filter(
-    (p) =>
-      p.title.toUpperCase().includes(coin) ||
-      p.selftext.toUpperCase().includes(coin)
-  );
-  allPosts = allPosts.concat(relevantPosts);
-  if (relevantPosts.length > 0) {
-    subredditsScanned.push('r/cryptocurrency');
-  }
+  // Search by ticker too
+  await new Promise(resolve => setTimeout(resolve, 500));
+  const tickerPosts = await searchReddit(`$${coin} crypto`, 30);
+  allPosts = allPosts.concat(tickerPosts);
 
-  console.log(`   Total posts collected: ${allPosts.length}`);
+  // Deduplicate by title
+  const seen = new Set();
+  allPosts = allPosts.filter(post => {
+    const key = post.title.toLowerCase().substring(0, 50);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 
-  // Analyze sentiment
-  const analysis = analyzeSentiment(allPosts);
+  console.log(`   Total unique posts: ${allPosts.length}`);
+
+  // Analyze sentiment with VADER
+  const analysis = analyzeWithVader(allPosts, coin);
 
   const response = {
     coin,
+    name: coinName,
     timestamp: new Date().toISOString(),
     source: 'Reddit',
+    analyzer: 'VADER',
     overall: {
       sentiment: analysis.sentiment,
       score: analysis.score,
@@ -384,7 +488,7 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
     },
   };
 
-  console.log(`   Sentiment: ${analysis.sentiment} (score: ${analysis.score})`);
+  console.log(`   Result: ${analysis.sentiment} (score: ${analysis.score}, confidence: ${analysis.confidence})`);
   res.json(response);
 });
 
@@ -395,19 +499,21 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    version: '2.1.0',
+    version: '2.2.0',
     dataSource: 'Reddit',
+    analyzer: 'VADER',
   });
 });
 
 app.get('/api', (req, res) => {
   res.json({
     name: 'Crypto Sentiment API',
-    version: '2.1.0',
-    dataSource: 'Reddit (real-time scraping)',
+    version: '2.2.0',
+    dataSource: 'Reddit (real-time)',
+    analyzer: 'VADER (optimized for social media)',
     payment: {
-      protocol: 'x402',
-      network: 'Base Mainnet',
+      protocol: 'x402 v2',
+      network: 'Base Mainnet (eip155:8453)',
       price: '$0.03 USDC',
     },
     supportedCoins: Object.keys(CRYPTO_SUBREDDITS),
@@ -441,3 +547,5 @@ app.listen(PORT, () => {
   console.log(`📍 Homepage: http://localhost:${PORT}`);
   console.log(`💳 Paid endpoint: http://localhost:${PORT}/v1/sentiment/BTC`);
 });
+
+export default app;
