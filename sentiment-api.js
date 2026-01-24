@@ -7,8 +7,8 @@ import cors from 'cors';
 import vaderSentiment from 'vader-sentiment';
 import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
-import { HTTPFacilitatorClient } from '@x402/core/http';
-import { createFacilitatorConfig } from '@coinbase/x402';
+import { HTTPFacilitatorClient } from '@x402/core/server';
+import { facilitator } from '@coinbase/x402';
 
 config();
 
@@ -60,8 +60,8 @@ const COIN_NAMES = {
   LTC: 'Litecoin',
 };
 
-// Create facilitator client using CDP config
-const facilitatorClient = new HTTPFacilitatorClient(createFacilitatorConfig());
+// Create facilitator client using CDP facilitator
+const facilitatorClient = new HTTPFacilitatorClient(facilitator);
 
 // Create resource server and register EVM scheme for Base Mainnet
 const resourceServer = new x402ResourceServer(facilitatorClient)
@@ -305,7 +305,7 @@ function analyzeWithVader(posts, coin) {
 app.use(
   paymentMiddleware(
     {
-      'GET /v1/sentiment/:coin': {
+      'GET /v1/sentiment/*': {
         accepts: [
           {
             scheme: 'exact',
