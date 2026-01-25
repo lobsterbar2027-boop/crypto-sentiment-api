@@ -9,6 +9,8 @@ import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { HTTPFacilitatorClient } from '@x402/core/server';
 import { facilitator } from '@coinbase/x402';
+import { createPaywall } from '@x402/paywall';
+import { evmPaywall } from '@x402/paywall/evm';
 
 config();
 
@@ -66,6 +68,15 @@ const facilitatorClient = new HTTPFacilitatorClient(facilitator);
 // Create resource server and register EVM scheme for Base Mainnet
 const resourceServer = new x402ResourceServer(facilitatorClient)
   .register(NETWORK, new ExactEvmScheme());
+
+// Build paywall UI for wallet connection
+const paywall = createPaywall()
+  .withNetwork(evmPaywall)
+  .withConfig({
+    appName: 'Crypto Sentiment API',
+    testnet: false, // Base Mainnet
+  })
+  .build();
 
 // Enable CORS and JSON parsing
 app.use(cors());
@@ -319,6 +330,8 @@ app.use(
       },
     },
     resourceServer,
+    undefined, // paywallConfig (using custom paywall)
+    paywall,   // custom paywall provider with wallet UI
   ),
 );
 
