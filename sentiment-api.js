@@ -11,6 +11,7 @@ import { HTTPFacilitatorClient } from '@x402/core/server';
 import { facilitator } from '@coinbase/x402';
 import { createPaywall } from '@x402/paywall';
 import { evmPaywall } from '@x402/paywall/evm';
+import { declareDiscoveryExtension } from '@x402/extensions/bazaar';
 
 config();
 
@@ -335,84 +336,32 @@ const SUPPORTED_COINS = Object.keys(CRYPTO_SUBREDDITS);
 // USDC contract on Base
 const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 
-// Price in atomic units (0.03 USDC = 30000 with 6 decimals)
-const PRICE_ATOMIC = '30000';
-
-// Custom 402 handler for /v1/sentiment - MUST be before payment middleware
-// Returns complete x402 v2 response with bazaar extension for x402scan
-app.use('/v1/sentiment', (req, res, next) => {
-  // Only handle requests to /v1/sentiment (not /v1/sentiment/:coin)
-  if (req.path !== '/' && req.path !== '') {
-    return next();
-  }
-  
-  // Check for payment header
-  const paymentHeader = req.headers['x-payment'];
-  
-  if (!paymentHeader) {
-    // No payment - return 402 with bazaar schema
-    const paymentRequired = {
-      x402Version: 2,
-      accepts: [
-        {
-          scheme: 'exact',
-          network: NETWORK,
-          amount: PRICE_ATOMIC,
-          payTo: payTo,
-          maxTimeoutSeconds: 60,
-          asset: USDC_ADDRESS,
-          extra: {
-            name: 'USD Coin',
-            version: '2',
-          },
-        },
-      ],
-      resource: {
-        url: `${BASE_URL}/v1/sentiment`,
-        description: 'Real-time crypto sentiment analysis - Reddit sentiment for BTC, ETH, SOL and 9 other cryptocurrencies',
-        mimeType: 'application/json',
+// Bazaar schema for x402scan dropdown
+const bazaarSchema = {
+  input: { coin: 'BTC' },
+  output: {
+    coin: 'BTC',
+    name: 'Bitcoin',
+    summary: '📈 Bitcoin sentiment is BULLISH (score: 0.234) with 73% confidence',
+    signal: 'BULLISH',
+    score: 0.234,
+    confidencePercent: '73%',
+    postsAnalyzed: 156,
+  },
+  schema: {
+    type: 'object',
+    properties: {
+      coin: {
+        type: 'string',
+        enum: SUPPORTED_COINS,
+        description: 'Cryptocurrency ticker symbol (BTC, ETH, SOL, etc.)',
       },
-      extensions: {
-        bazaar: {
-          info: {
-            input: { coin: 'BTC' },
-            output: {
-              coin: 'BTC',
-              name: 'Bitcoin',
-              summary: '📈 Bitcoin sentiment is BULLISH (score: 0.234) with 73% confidence',
-              signal: 'BULLISH',
-              score: 0.234,
-              confidencePercent: '73%',
-              postsAnalyzed: 156,
-            },
-          },
-          schema: {
-            type: 'object',
-            properties: {
-              coin: {
-                type: 'string',
-                enum: SUPPORTED_COINS,
-                description: 'Cryptocurrency ticker symbol (BTC, ETH, SOL, etc.)',
-              },
-            },
-            required: ['coin'],
-          },
-        },
-      },
-    };
-    
-    // Set headers
-    res.setHeader('X-Payment', Buffer.from(JSON.stringify(paymentRequired)).toString('base64'));
-    res.setHeader('Content-Type', 'application/json');
-    
-    return res.status(402).json(paymentRequired);
-  }
-  
-  // Has payment header - let payment middleware handle verification
-  next();
-});
+    },
+    required: ['coin'],
+  },
+};
 
-// Main payment middleware (handles payment verification and other routes)
+// Main payment middleware with bazaar extension for x402scan
 app.use(
   paymentMiddleware(
     {
@@ -427,6 +376,9 @@ app.use(
         ],
         description: 'Real-time crypto sentiment analysis - Reddit sentiment for BTC, ETH, SOL and 9 other cryptocurrencies. Returns sentiment score, confidence, and top posts.',
         mimeType: 'application/json',
+        extensions: {
+          ...declareDiscoveryExtension(bazaarSchema),
+        },
       },
       'GET /v1/sentiment': {
         accepts: [
@@ -439,6 +391,9 @@ app.use(
         ],
         description: 'Real-time crypto sentiment analysis - Reddit sentiment for BTC, ETH, SOL and 9 other cryptocurrencies. Returns sentiment score, confidence, and top posts.',
         mimeType: 'application/json',
+        extensions: {
+          ...declareDiscoveryExtension(bazaarSchema),
+        },
       },
       // Keep GET with param for backwards compatibility
       'GET /v1/sentiment/*': {
