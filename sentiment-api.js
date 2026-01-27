@@ -332,6 +332,94 @@ const BASE_URL = process.env.BASE_URL || 'https://crypto-sentiment-api-productio
 // List of all supported coins for discovery
 const SUPPORTED_COINS = Object.keys(CRYPTO_SUBREDDITS);
 
+// USDC contract on Base
+const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+
+// Price in atomic units (0.03 USDC = 30000 with 6 decimals)
+const PRICE_ATOMIC = '30000';
+
+// Example response for bazaar extension
+const exampleOutput = {
+  coin: 'BTC',
+  name: 'Bitcoin',
+  summary: '📈 Bitcoin sentiment is BULLISH (score: 0.234) with 73% confidence based on 156 Reddit posts.',
+  signal: 'BULLISH',
+  score: 0.234,
+  confidencePercent: '73%',
+  postsAnalyzed: 156,
+  positivePercent: '61%',
+  neutralPercent: '27%',
+  negativePercent: '12%',
+};
+
+// Custom middleware to handle 402 with bazaar extension BEFORE payment middleware
+// This ensures x402scan gets the schema it needs
+app.use('/v1/sentiment/:coin', (req, res, next) => {
+  // Only intercept if there's no payment header (i.e., first request that triggers 402)
+  const paymentHeader = req.headers['x-payment'];
+  
+  if (!paymentHeader) {
+    // No payment provided - return custom 402 with bazaar extension
+    const coin = req.params.coin?.toUpperCase() || 'BTC';
+    const requestUrl = `${BASE_URL}/v1/sentiment/${coin}`;
+    
+    const paymentRequired = {
+      x402Version: 2,
+      accepts: [
+        {
+          scheme: 'exact',
+          network: NETWORK,
+          amount: PRICE_ATOMIC,
+          payTo: payTo,
+          maxTimeoutSeconds: 60,
+          asset: USDC_ADDRESS,
+          extra: {
+            name: 'USD Coin',
+            version: '2',
+          },
+        },
+      ],
+      resource: {
+        url: requestUrl,
+        description: 'Real-time crypto sentiment analysis - Reddit sentiment for BTC, ETH, SOL and 9 other cryptocurrencies',
+        mimeType: 'application/json',
+      },
+      extensions: {
+        bazaar: {
+          info: {
+            input: {
+              coin: coin,
+            },
+            output: exampleOutput,
+          },
+          schema: {
+            type: 'object',
+            properties: {
+              coin: {
+                type: 'string',
+                enum: SUPPORTED_COINS,
+                description: 'Cryptocurrency ticker symbol (BTC, ETH, SOL, etc.)',
+              },
+            },
+            required: ['coin'],
+          },
+        },
+      },
+    };
+    
+    // Set headers
+    res.setHeader('X-Payment', Buffer.from(JSON.stringify(paymentRequired)).toString('base64'));
+    res.setHeader('Content-Type', 'application/json');
+    
+    // Return 402 with full response body
+    return res.status(402).json(paymentRequired);
+  }
+  
+  // Payment header exists - let the payment middleware handle verification
+  next();
+});
+
+// Main payment middleware (handles payment verification)
 app.use(
   paymentMiddleware(
     {
@@ -349,8 +437,8 @@ app.use(
       },
     },
     resourceServer,
-    undefined, // paywallConfig (using custom paywall)
-    paywall,   // custom paywall provider with wallet UI
+    undefined,
+    paywall,
   ),
 );
 
@@ -358,7 +446,6 @@ app.use(
 // x402 DISCOVERY DOCUMENT
 // ============================================
 app.get('/.well-known/x402', (req, res) => {
-  // List all coin endpoints explicitly for discovery
   const resources = SUPPORTED_COINS.map(coin => 
     `${BASE_URL}/v1/sentiment/${coin}`
   );
@@ -384,7 +471,6 @@ ${SUPPORTED_COINS.map(coin => `- **${coin}** (${COIN_NAMES[coin]})`).join('\n')}
 - Confidence percentage
 - Breakdown of positive/neutral/negative posts
 - Top posts driving sentiment
-- Multi-subreddit coverage
 
 ## Support
 - Twitter: [@BreakTheCubicle](https://x.com/BreakTheCubicle)
@@ -983,7 +1069,7 @@ app.get('/v1/sentiment/:coin', async (req, res) => {
       paymentStatus: 'confirmed',
       
       // Note for API users
-      note: 'No charge for failed requests. Your payment will be refunded.',
+      note: 'Reddit data temporarily unavailable. Please try again in a few minutes.',
     });
   }
 
