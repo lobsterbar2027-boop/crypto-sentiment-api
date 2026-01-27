@@ -334,7 +334,8 @@ const SUPPORTED_COINS = Object.keys(CRYPTO_SUBREDDITS);
 
 // Custom middleware to add bazaar extension to 402 responses (must be BEFORE payment middleware)
 app.use('/v1/sentiment', (req, res, next) => {
-  if (req.method === 'POST') {
+  // Only for requests to /v1/sentiment (not /v1/sentiment/:coin)
+  if (req.path === '/' || req.path === '') {
     const originalSend = res.send.bind(res);
     
     res.send = function(body) {
@@ -399,7 +400,19 @@ app.use(
         description: 'Real-time crypto sentiment analysis - Reddit sentiment for BTC, ETH, SOL and 9 other cryptocurrencies. Returns sentiment score, confidence, and top posts.',
         mimeType: 'application/json',
       },
-      // Keep GET for backwards compatibility and direct URL access
+      'GET /v1/sentiment': {
+        accepts: [
+          {
+            scheme: 'exact',
+            price: '$0.03',
+            network: NETWORK,
+            payTo,
+          },
+        ],
+        description: 'Real-time crypto sentiment analysis - Reddit sentiment for BTC, ETH, SOL and 9 other cryptocurrencies. Returns sentiment score, confidence, and top posts.',
+        mimeType: 'application/json',
+      },
+      // Keep GET with param for backwards compatibility and direct URL access
       'GET /v1/sentiment/*': {
         accepts: [
           {
@@ -1097,6 +1110,13 @@ async function getSentiment(coin) {
 // POST /v1/sentiment - x402scan sends coin in body
 app.post('/v1/sentiment', async (req, res) => {
   const coin = req.body?.coin || 'BTC';
+  const result = await getSentiment(coin);
+  res.json(result);
+});
+
+// GET /v1/sentiment - for x402scan testing (defaults to BTC)
+app.get('/v1/sentiment', async (req, res) => {
+  const coin = req.query?.coin || 'BTC';
   const result = await getSentiment(coin);
   res.json(result);
 });
