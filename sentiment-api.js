@@ -332,34 +332,6 @@ const BASE_URL = process.env.BASE_URL || 'https://crypto-sentiment-api-productio
 // List of all supported coins for discovery
 const SUPPORTED_COINS = Object.keys(CRYPTO_SUBREDDITS);
 
-// Example response for bazaar extension
-const exampleResponse = {
-  coin: 'BTC',
-  name: 'Bitcoin',
-  timestamp: '2026-01-27T12:00:00.000Z',
-  summary: '📈 Bitcoin sentiment is BULLISH (score: 0.234) with 73% confidence based on 156 Reddit posts.',
-  signal: 'BULLISH',
-  score: 0.234,
-  scoreExplanation: 'Moderate positive sentiment',
-  confidence: 0.73,
-  confidencePercent: '73%',
-  postsAnalyzed: 156,
-  positiveCount: 95,
-  positivePercent: '61%',
-  neutralCount: 42,
-  neutralPercent: '27%',
-  negativeCount: 19,
-  negativePercent: '12%',
-  source: 'Reddit',
-  subredditsScanned: ['r/bitcoin', 'r/BitcoinMarkets', 'r/CryptoCurrency'],
-  topPosts: [
-    { rank: 1, title: 'BTC breaks new ATH!', sentiment: 'positive', sentimentScore: 0.89 }
-  ],
-  paymentNetwork: 'Base Mainnet',
-  paymentAmount: '$0.03 USDC',
-  paymentStatus: 'confirmed',
-};
-
 app.use(
   paymentMiddleware(
     {
@@ -372,35 +344,8 @@ app.use(
             payTo,
           },
         ],
-        description: 'Real-time crypto sentiment analysis - Social media & Reddit sentiment for BTC, ETH, SOL and other cryptocurrencies',
+        description: 'Real-time crypto sentiment analysis - Reddit sentiment for BTC, ETH, SOL and 9 other cryptocurrencies. Returns sentiment score, confidence, and top posts.',
         mimeType: 'application/json',
-        resource: {
-          url: `${BASE_URL}/v1/sentiment/{coin}`,
-          description: 'Real-time crypto sentiment analysis - Social media & Reddit sentiment for BTC, ETH, SOL and other cryptocurrencies',
-          mimeType: 'application/json',
-        },
-        extensions: {
-          bazaar: {
-            info: {
-              input: {
-                coin: 'BTC',
-                description: 'Cryptocurrency ticker symbol. Supported: ' + SUPPORTED_COINS.join(', '),
-              },
-              output: exampleResponse,
-            },
-            schema: {
-              type: 'object',
-              properties: {
-                coin: {
-                  type: 'string',
-                  enum: SUPPORTED_COINS,
-                  description: 'Cryptocurrency ticker symbol',
-                },
-              },
-              required: ['coin'],
-            },
-          },
-        },
       },
     },
     resourceServer,
@@ -440,17 +385,6 @@ ${SUPPORTED_COINS.map(coin => `- **${coin}** (${COIN_NAMES[coin]})`).join('\n')}
 - Breakdown of positive/neutral/negative posts
 - Top posts driving sentiment
 - Multi-subreddit coverage
-
-## Example Response
-\`\`\`json
-{
-  "summary": "📈 Bitcoin sentiment is BULLISH (score: 0.234) with 73% confidence",
-  "signal": "BULLISH",
-  "score": 0.234,
-  "confidencePercent": "73%",
-  "postsAnalyzed": 156
-}
-\`\`\`
 
 ## Support
 - Twitter: [@BreakTheCubicle](https://x.com/BreakTheCubicle)
