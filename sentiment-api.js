@@ -348,6 +348,18 @@ app.use(
         description: 'Real-time crypto sentiment analysis - Reddit sentiment for BTC, ETH, SOL and 9 other cryptocurrencies. Returns sentiment score, confidence, and top posts.',
         mimeType: 'application/json',
       },
+      'POST /v1/sentiment/*': {
+        accepts: [
+          {
+            scheme: 'exact',
+            price: '$0.03',
+            network: NETWORK,
+            payTo,
+          },
+        ],
+        description: 'Real-time crypto sentiment analysis - Reddit sentiment for BTC, ETH, SOL and 9 other cryptocurrencies. Returns sentiment score, confidence, and top posts.',
+        mimeType: 'application/json',
+      },
     },
     resourceServer,
     undefined,
@@ -903,7 +915,8 @@ console.log(sentiment.signal); <span style="color: var(--cyan)">// "BULLISH"</sp
 // ============================================
 // PROTECTED ENDPOINT - Requires x402 Payment
 // ============================================
-app.get('/v1/sentiment/:coin', async (req, res) => {
+// Handle both GET and POST (x402scan uses POST for payments)
+app.all('/v1/sentiment/:coin', async (req, res) => {
   const coin = req.params.coin.toUpperCase();
   const coinName = COIN_NAMES[coin] || coin;
   
