@@ -332,11 +332,62 @@ const BASE_URL = process.env.BASE_URL || 'https://crypto-sentiment-api-productio
 // List of all supported coins for discovery
 const SUPPORTED_COINS = Object.keys(CRYPTO_SUBREDDITS);
 
+// Custom middleware to add bazaar extension to 402 responses (must be BEFORE payment middleware)
+app.use('/v1/sentiment', (req, res, next) => {
+  if (req.method === 'POST') {
+    const originalSend = res.send.bind(res);
+    
+    res.send = function(body) {
+      if (res.statusCode === 402) {
+        try {
+          let parsed = typeof body === 'string' ? JSON.parse(body) : body;
+          
+          // Add bazaar extension for x402scan dropdown
+          parsed.extensions = {
+            ...parsed.extensions,
+            bazaar: {
+              info: {
+                input: { coin: 'BTC' },
+                output: {
+                  coin: 'BTC',
+                  name: 'Bitcoin',
+                  summary: '📈 Bitcoin sentiment is BULLISH (score: 0.234) with 73% confidence',
+                  signal: 'BULLISH',
+                  score: 0.234,
+                  confidencePercent: '73%',
+                  postsAnalyzed: 156,
+                },
+              },
+              schema: {
+                type: 'object',
+                properties: {
+                  coin: {
+                    type: 'string',
+                    enum: SUPPORTED_COINS,
+                    description: 'Cryptocurrency ticker symbol (BTC, ETH, SOL, etc.)',
+                  },
+                },
+                required: ['coin'],
+              },
+            },
+          };
+          
+          body = JSON.stringify(parsed);
+        } catch (e) {
+          // If parsing fails, send original
+        }
+      }
+      return originalSend(body);
+    };
+  }
+  next();
+});
+
 // Main payment middleware (handles both 402 generation AND payment verification)
 app.use(
   paymentMiddleware(
     {
-      'GET /v1/sentiment/*': {
+      'POST /v1/sentiment': {
         accepts: [
           {
             scheme: 'exact',
@@ -348,7 +399,8 @@ app.use(
         description: 'Real-time crypto sentiment analysis - Reddit sentiment for BTC, ETH, SOL and 9 other cryptocurrencies. Returns sentiment score, confidence, and top posts.',
         mimeType: 'application/json',
       },
-      'POST /v1/sentiment/*': {
+      // Keep GET for backwards compatibility and direct URL access
+      'GET /v1/sentiment/*': {
         accepts: [
           {
             scheme: 'exact',
@@ -371,18 +423,18 @@ app.use(
 // x402 DISCOVERY DOCUMENT
 // ============================================
 app.get('/.well-known/x402', (req, res) => {
-  const resources = SUPPORTED_COINS.map(coin => 
-    `${BASE_URL}/v1/sentiment/${coin}`
-  );
-  
+  // Single endpoint - coin selected via dropdown in x402scan
   res.json({
     version: 1,
-    resources,
+    resources: [
+      `${BASE_URL}/v1/sentiment`
+    ],
     instructions: `# GenVox Crypto Sentiment API
 
 Real-time cryptocurrency sentiment analysis powered by Reddit data and VADER sentiment analysis.
 
-## Supported Coins
+## How to Use
+Select a coin from the dropdown and click Fetch. Supported coins:
 ${SUPPORTED_COINS.map(coin => `- **${coin}** (${COIN_NAMES[coin]})`).join('\n')}
 
 ## Pricing
@@ -915,20 +967,20 @@ console.log(sentiment.signal); <span style="color: var(--cyan)">// "BULLISH"</sp
 // ============================================
 // PROTECTED ENDPOINT - Requires x402 Payment
 // ============================================
-// Handle both GET and POST (x402scan uses POST for payments)
-app.all('/v1/sentiment/:coin', async (req, res) => {
-  const coin = req.params.coin.toUpperCase();
-  const coinName = COIN_NAMES[coin] || coin;
-  
-  console.log(`\n💰 Processing request for ${coin} (${coinName}) sentiment`);
 
-  const subreddits = CRYPTO_SUBREDDITS[coin] || ['CryptoCurrency'];
+// Shared function to get sentiment (used by both POST and GET)
+async function getSentiment(coin) {
+  const coinUpper = coin.toUpperCase();
+  const coinName = COIN_NAMES[coinUpper] || coinUpper;
+  
+  console.log(`\n💰 Processing request for ${coinUpper} (${coinName}) sentiment`);
+
+  const subreddits = CRYPTO_SUBREDDITS[coinUpper] || ['CryptoCurrency'];
   const subredditsScanned = [];
   let allPosts = [];
 
   // Fetch from each subreddit
   for (const sub of subreddits) {
-    // Add small delay between requests to avoid rate limiting
     if (allPosts.length > 0) {
       await new Promise(resolve => setTimeout(resolve, 500));
     }
@@ -947,7 +999,7 @@ app.all('/v1/sentiment/:coin', async (req, res) => {
 
   // Search by ticker too
   await new Promise(resolve => setTimeout(resolve, 500));
-  const tickerPosts = await searchReddit(`$${coin} crypto`, 30);
+  const tickerPosts = await searchReddit(`$${coinUpper} crypto`, 30);
   allPosts = allPosts.concat(tickerPosts);
 
   // Deduplicate by title
@@ -963,46 +1015,33 @@ app.all('/v1/sentiment/:coin', async (req, res) => {
 
   // Handle case where no posts were found
   if (allPosts.length === 0) {
-    console.log(`   ⚠️ No posts found for ${coin}`);
-    return res.json({
-      coin,
+    console.log(`   ⚠️ No posts found for ${coinUpper}`);
+    return {
+      coin: coinUpper,
       name: coinName,
       timestamp: new Date().toISOString(),
-      
-      // Human-readable summary
       summary: `Unable to fetch Reddit data for ${coinName}. Reddit may be rate-limiting requests. Try again in a few minutes.`,
       signal: 'UNAVAILABLE',
-      
-      // Flat, readable fields
       score: null,
       confidence: null,
       postsAnalyzed: 0,
-      
-      // Breakdown
       positiveCount: 0,
       neutralCount: 0,
       negativeCount: 0,
-      
-      // Source info
       source: 'Reddit',
       analyzer: 'VADER',
       subredditsScanned: [],
       topPosts: [],
-      
-      // Payment confirmation
       paymentNetwork: 'Base Mainnet',
       paymentAmount: '$0.03 USDC',
       paymentStatus: 'confirmed',
-      
-      // Note for API users
       note: 'Reddit data temporarily unavailable. Please try again in a few minutes.',
-    });
+    };
   }
 
   // Analyze sentiment with VADER
-  const analysis = analyzeWithVader(allPosts, coin);
+  const analysis = analyzeWithVader(allPosts, coinUpper);
   
-  // Create human-readable signal
   const signalEmoji = {
     'very bullish': '🚀',
     'bullish': '📈',
@@ -1013,20 +1052,14 @@ app.all('/v1/sentiment/:coin', async (req, res) => {
   
   const emoji = signalEmoji[analysis.sentiment] || '📊';
   const confidencePercent = Math.round(analysis.confidence * 100);
-  
-  // Build human-readable summary
   const summary = `${emoji} ${coinName} sentiment is ${analysis.sentiment.toUpperCase()} (score: ${analysis.score.toFixed(3)}) with ${confidencePercent}% confidence based on ${analysis.postsAnalyzed} Reddit posts.`;
 
   const response = {
-    coin,
+    coin: coinUpper,
     name: coinName,
     timestamp: new Date().toISOString(),
-    
-    // Human-readable summary at the top
     summary,
     signal: analysis.sentiment.toUpperCase().replace(' ', '_'),
-    
-    // Flat, easy-to-read metrics
     score: analysis.score,
     scoreExplanation: analysis.score > 0.3 ? 'Strong positive sentiment' : 
                       analysis.score > 0.1 ? 'Moderate positive sentiment' :
@@ -1035,21 +1068,15 @@ app.all('/v1/sentiment/:coin', async (req, res) => {
     confidence: analysis.confidence,
     confidencePercent: `${confidencePercent}%`,
     postsAnalyzed: analysis.postsAnalyzed,
-    
-    // Breakdown as flat fields (with safe division)
     positiveCount: analysis.breakdown.positive,
     positivePercent: analysis.postsAnalyzed > 0 ? `${Math.round((analysis.breakdown.positive / analysis.postsAnalyzed) * 100)}%` : '0%',
     neutralCount: analysis.breakdown.neutral,
     neutralPercent: analysis.postsAnalyzed > 0 ? `${Math.round((analysis.breakdown.neutral / analysis.postsAnalyzed) * 100)}%` : '0%',
     negativeCount: analysis.breakdown.negative,
     negativePercent: analysis.postsAnalyzed > 0 ? `${Math.round((analysis.breakdown.negative / analysis.postsAnalyzed) * 100)}%` : '0%',
-    
-    // Source info
     source: 'Reddit',
     analyzer: 'VADER (Valence Aware Dictionary and sEntiment Reasoner)',
     subredditsScanned,
-    
-    // Top posts with readable format
     topPosts: analysis.topPosts.map((post, i) => ({
       rank: i + 1,
       title: post.title,
@@ -1058,17 +1085,28 @@ app.all('/v1/sentiment/:coin', async (req, res) => {
       subreddit: `r/${post.subreddit}`,
       engagement: post.engagement,
     })),
-    
-    // Payment confirmation
     paymentNetwork: 'Base Mainnet',
     paymentAmount: '$0.03 USDC',
     paymentStatus: 'confirmed',
   };
 
   console.log(`   Result: ${analysis.sentiment} (score: ${analysis.score}, confidence: ${analysis.confidence})`);
-  res.json(response);
+  return response;
+}
+
+// POST /v1/sentiment - x402scan sends coin in body
+app.post('/v1/sentiment', async (req, res) => {
+  const coin = req.body?.coin || 'BTC';
+  const result = await getSentiment(coin);
+  res.json(result);
 });
 
+// GET /v1/sentiment/:coin - backwards compatible URL-based access
+app.get('/v1/sentiment/:coin', async (req, res) => {
+  const coin = req.params.coin;
+  const result = await getSentiment(coin);
+  res.json(result);
+});
 // ============================================
 // FREE ENDPOINTS
 // ============================================
