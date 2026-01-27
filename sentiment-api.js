@@ -326,8 +326,8 @@ function analyzeWithVader(posts, coin) {
 // x402 v2 PAYMENT MIDDLEWARE
 // ============================================
 
-// Base URL for discovery (Railway deployment)
-const BASE_URL = process.env.BASE_URL || 'https://crypto-sentiment-api-production.up.railway.app';
+// Base URL for discovery (custom domain)
+const BASE_URL = process.env.BASE_URL || 'https://api.genvox.io';
 
 // List of all supported coins for discovery
 const SUPPORTED_COINS = Object.keys(CRYPTO_SUBREDDITS);
