@@ -795,7 +795,7 @@ app.get('/', (req, res) => {
     <div class="cta-section">
       <div class="cta-title">🚀 Try It Now</div>
       <p class="cta-subtitle">Pay $0.03 USDC per query. No subscriptions. No API keys.</p>
-      <a href="https://www.x402scan.com/server/cd7fc186-0e68-4025-a005-2febc32b0650" class="btn btn-primary" target="_blank">
+      <a href="https://www.x402scan.com/server/5aec2eb2-473d-43e1-b9a6-6fed42b04212" class="btn btn-primary" target="_blank">
         Launch on x402scan →
       </a>
       <a href="https://github.com/lobsterbar2027-boop/crypto-sentiment-api" class="btn btn-secondary" target="_blank">
@@ -949,7 +949,7 @@ console.log(sentiment.signal); <span style="color: var(--cyan)">// "BULLISH"</sp
       <div class="footer-links">
         <a href="https://x.com/BreakTheCubicle" target="_blank">Twitter</a>
         <a href="https://github.com/lobsterbar2027-boop/crypto-sentiment-api" target="_blank">GitHub</a>
-        <a href="https://www.x402scan.com/server/cd7fc186-0e68-4025-a005-2febc32b0650" target="_blank">x402scan</a>
+        <a href="https://www.x402scan.com/server/5aec2eb2-473d-43e1-b9a6-6fed42b04212" target="_blank">x402scan</a>
         <a href="https://x402.org" target="_blank">x402 Protocol</a>
         <a href="https://base.org" target="_blank">Base</a>
       </div>
