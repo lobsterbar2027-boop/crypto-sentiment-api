@@ -79,8 +79,11 @@ const paywall = createPaywall()
   })
   .build();
 
-// Enable CORS and JSON parsing
-app.use(cors());
+// Enable CORS with exposed headers for x402
+app.use(cors({
+  origin: '*',
+  exposedHeaders: ['X-Payment', 'x-payment', 'Payment-Required', 'payment-required'],
+}));
 app.use(express.json());
 
 // Trust proxy for Railway deployments
@@ -322,6 +325,41 @@ function analyzeWithVader(posts, coin) {
 // ============================================
 // x402 v2 PAYMENT MIDDLEWARE
 // ============================================
+
+// Base URL for discovery (Railway deployment)
+const BASE_URL = process.env.BASE_URL || 'https://crypto-sentiment-api-production.up.railway.app';
+
+// List of all supported coins for discovery
+const SUPPORTED_COINS = Object.keys(CRYPTO_SUBREDDITS);
+
+// Example response for bazaar extension
+const exampleResponse = {
+  coin: 'BTC',
+  name: 'Bitcoin',
+  timestamp: '2026-01-27T12:00:00.000Z',
+  summary: '📈 Bitcoin sentiment is BULLISH (score: 0.234) with 73% confidence based on 156 Reddit posts.',
+  signal: 'BULLISH',
+  score: 0.234,
+  scoreExplanation: 'Moderate positive sentiment',
+  confidence: 0.73,
+  confidencePercent: '73%',
+  postsAnalyzed: 156,
+  positiveCount: 95,
+  positivePercent: '61%',
+  neutralCount: 42,
+  neutralPercent: '27%',
+  negativeCount: 19,
+  negativePercent: '12%',
+  source: 'Reddit',
+  subredditsScanned: ['r/bitcoin', 'r/BitcoinMarkets', 'r/CryptoCurrency'],
+  topPosts: [
+    { rank: 1, title: 'BTC breaks new ATH!', sentiment: 'positive', sentimentScore: 0.89 }
+  ],
+  paymentNetwork: 'Base Mainnet',
+  paymentAmount: '$0.03 USDC',
+  paymentStatus: 'confirmed',
+};
+
 app.use(
   paymentMiddleware(
     {
@@ -334,8 +372,35 @@ app.use(
             payTo,
           },
         ],
-        description: 'Get real-time Reddit sentiment analysis for any cryptocurrency',
+        description: 'Real-time crypto sentiment analysis - Social media & Reddit sentiment for BTC, ETH, SOL and other cryptocurrencies',
         mimeType: 'application/json',
+        resource: {
+          url: `${BASE_URL}/v1/sentiment/{coin}`,
+          description: 'Real-time crypto sentiment analysis - Social media & Reddit sentiment for BTC, ETH, SOL and other cryptocurrencies',
+          mimeType: 'application/json',
+        },
+        extensions: {
+          bazaar: {
+            info: {
+              input: {
+                coin: 'BTC',
+                description: 'Cryptocurrency ticker symbol. Supported: ' + SUPPORTED_COINS.join(', '),
+              },
+              output: exampleResponse,
+            },
+            schema: {
+              type: 'object',
+              properties: {
+                coin: {
+                  type: 'string',
+                  enum: SUPPORTED_COINS,
+                  description: 'Cryptocurrency ticker symbol',
+                },
+              },
+              required: ['coin'],
+            },
+          },
+        },
       },
     },
     resourceServer,
@@ -345,9 +410,63 @@ app.use(
 );
 
 // ============================================
-// HOMEPAGE WITH GENVOX STYLING
+// x402 DISCOVERY DOCUMENT
+// ============================================
+app.get('/.well-known/x402', (req, res) => {
+  // List all coin endpoints explicitly for discovery
+  const resources = SUPPORTED_COINS.map(coin => 
+    `${BASE_URL}/v1/sentiment/${coin}`
+  );
+  
+  res.json({
+    version: 1,
+    resources,
+    instructions: `# GenVox Crypto Sentiment API
+
+Real-time cryptocurrency sentiment analysis powered by Reddit data and VADER sentiment analysis.
+
+## Supported Coins
+${SUPPORTED_COINS.map(coin => `- **${coin}** (${COIN_NAMES[coin]})`).join('\n')}
+
+## Pricing
+- **$0.03 USDC** per query
+- **Network:** Base Mainnet
+- **Payment:** Gasless EIP-3009 signatures
+
+## What You Get
+- Human-readable sentiment summary with emoji signal
+- Numerical sentiment score (-1 to +1)
+- Confidence percentage
+- Breakdown of positive/neutral/negative posts
+- Top posts driving sentiment
+- Multi-subreddit coverage
+
+## Example Response
+\`\`\`json
+{
+  "summary": "📈 Bitcoin sentiment is BULLISH (score: 0.234) with 73% confidence",
+  "signal": "BULLISH",
+  "score": 0.234,
+  "confidencePercent": "73%",
+  "postsAnalyzed": 156
+}
+\`\`\`
+
+## Support
+- Twitter: [@BreakTheCubicle](https://x.com/BreakTheCubicle)
+- GitHub: [crypto-sentiment-api](https://github.com/lobsterbar2027-boop/crypto-sentiment-api)
+`,
+  });
+});
+
+// ============================================
+// HOMEPAGE - GENVOX LANDING PAGE
 // ============================================
 app.get('/', (req, res) => {
+  const supportedCoins = Object.keys(CRYPTO_SUBREDDITS).map(coin => 
+    `<span class="coin">${coin}</span>`
+  ).join('');
+  
   res.send(`
 <!DOCTYPE html>
 <html lang="en">
@@ -355,6 +474,7 @@ app.get('/', (req, res) => {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GenVox - Crypto Sentiment API</title>
+  <meta name="description" content="Real-time crypto sentiment analysis API. Pay $0.03 per query with USDC on Base. No subscriptions.">
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -371,6 +491,7 @@ app.get('/', (req, res) => {
       background: var(--black);
       color: white;
       min-height: 100vh;
+      line-height: 1.6;
     }
     .bg-gradient {
       position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1;
@@ -400,8 +521,8 @@ app.get('/', (req, res) => {
       margin-bottom: 20px;
     }
     .logo {
-      width: 60px;
-      height: 60px;
+      width: 70px;
+      height: 70px;
       animation: float 3s ease-in-out infinite;
     }
     @keyframes float {
@@ -410,7 +531,7 @@ app.get('/', (req, res) => {
     }
     .logo-text {
       font-family: 'Orbitron', sans-serif;
-      font-size: 2.5rem;
+      font-size: 3rem;
       font-weight: 900;
       background: linear-gradient(135deg, var(--cyan), var(--yellow), var(--green));
       -webkit-background-clip: text;
@@ -418,13 +539,13 @@ app.get('/', (req, res) => {
       -webkit-text-fill-color: transparent;
     }
     .tagline {
-      font-size: 1.2rem;
+      font-size: 1.4rem;
       color: var(--cyan);
       font-weight: 700;
+      margin-bottom: 10px;
     }
     .subline {
       color: rgba(255, 255, 255, 0.6);
-      margin-top: 10px;
     }
 
     /* Cards */
@@ -440,14 +561,9 @@ app.get('/', (req, res) => {
     .card::before {
       content: '';
       position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 3px;
+      top: 0; left: 0;
+      width: 100%; height: 3px;
       background: linear-gradient(90deg, var(--cyan), var(--green));
-    }
-    .card:hover {
-      box-shadow: 0 0 30px rgba(0, 217, 255, 0.2);
     }
     .card-title {
       font-family: 'Orbitron', sans-serif;
@@ -480,58 +596,29 @@ app.get('/', (req, res) => {
       font-size: 1.1rem;
     }
 
-    /* Wallet Info */
-    .wallet-info {
-      display: flex;
-      align-items: center;
-      gap: 15px;
-      padding: 15px 20px;
-      border-radius: 8px;
-      margin-bottom: 20px;
-      background: rgba(255, 71, 87, 0.1);
-      border: 1px solid var(--red);
+    /* CTA Section */
+    .cta-section {
+      text-align: center;
+      padding: 30px;
+      background: linear-gradient(135deg, rgba(0, 217, 255, 0.1), rgba(0, 255, 136, 0.1));
+      border-radius: 12px;
+      margin: 30px 0;
     }
-    .wallet-info.connected {
-      background: rgba(0, 255, 136, 0.1);
-      border-color: var(--green);
-    }
-    .wallet-status {
-      font-weight: 700;
-    }
-    .wallet-address {
-      font-family: 'Space Mono', monospace;
-      font-size: 0.9rem;
-      color: var(--cyan);
-    }
-
-    /* Form Elements */
-    .form-row {
-      display: flex;
-      gap: 15px;
-      align-items: center;
-      flex-wrap: wrap;
-      margin-top: 20px;
-    }
-    select {
-      padding: 14px 20px;
-      border-radius: 8px;
-      background: rgba(0, 0, 0, 0.5);
-      border: 2px solid rgba(0, 217, 255, 0.3);
+    .cta-title {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 1.5rem;
       color: white;
-      font-family: 'Space Mono', monospace;
-      font-size: 1rem;
-      cursor: pointer;
-      transition: all 0.3s;
+      margin-bottom: 15px;
     }
-    select:hover, select:focus {
-      border-color: var(--cyan);
-      outline: none;
+    .cta-subtitle {
+      color: rgba(255, 255, 255, 0.7);
+      margin-bottom: 20px;
     }
 
     /* Buttons */
     .btn {
-      padding: 14px 28px;
-      font-size: 1rem;
+      padding: 16px 40px;
+      font-size: 1.1rem;
       font-weight: 700;
       text-transform: uppercase;
       border: none;
@@ -541,75 +628,67 @@ app.get('/', (req, res) => {
       transition: all 0.3s;
       text-decoration: none;
       display: inline-block;
+      margin: 10px;
     }
     .btn-primary {
       background: linear-gradient(135deg, var(--cyan), var(--green));
       color: var(--black);
-      box-shadow: 0 0 20px rgba(0, 217, 255, 0.4);
+      box-shadow: 0 0 30px rgba(0, 217, 255, 0.5);
     }
-    .btn-primary:hover:not(:disabled) {
+    .btn-primary:hover {
       transform: translateY(-3px);
-      box-shadow: 0 0 40px rgba(0, 217, 255, 0.6);
+      box-shadow: 0 0 50px rgba(0, 217, 255, 0.8);
     }
     .btn-secondary {
       background: transparent;
       color: var(--yellow);
       border: 2px solid var(--yellow);
     }
-    .btn-secondary:hover:not(:disabled) {
+    .btn-secondary:hover {
       background: var(--yellow);
       color: var(--black);
     }
-    .btn:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
-      transform: none !important;
+
+    /* Coins */
+    .coins {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 20px 0;
+    }
+    .coin {
+      padding: 8px 16px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 20px;
+      font-size: 0.9rem;
+      transition: all 0.3s;
+    }
+    .coin:hover {
+      background: rgba(0, 217, 255, 0.2);
+      border-color: var(--cyan);
     }
 
-    /* Status Messages */
-    #status {
-      margin-top: 20px;
-      padding: 15px 20px;
-      border-radius: 8px;
-      display: none;
-      font-weight: 700;
-    }
-    #status.info {
-      display: block;
-      background: rgba(0, 217, 255, 0.1);
-      border: 1px solid var(--cyan);
-      color: var(--cyan);
-    }
-    #status.success {
-      display: block;
-      background: rgba(0, 255, 136, 0.1);
-      border: 1px solid var(--green);
-      color: var(--green);
-    }
-    #status.error {
-      display: block;
-      background: rgba(255, 71, 87, 0.1);
-      border: 1px solid var(--red);
-      color: var(--red);
-    }
-
-    /* Results */
-    #result {
-      margin-top: 20px;
-      padding: 20px;
+    /* Example Response */
+    .example-response {
       background: rgba(0, 0, 0, 0.5);
       border: 1px solid rgba(0, 217, 255, 0.3);
       border-radius: 8px;
-      display: none;
-      font-family: 'Space Mono', monospace;
-      font-size: 0.9rem;
-      white-space: pre-wrap;
-      max-height: 400px;
-      overflow-y: auto;
-      color: #e0e0e0;
+      padding: 20px;
+      font-size: 0.85rem;
+      overflow-x: auto;
+      margin-top: 20px;
     }
+    .response-header {
+      color: var(--cyan);
+      margin-bottom: 10px;
+      font-weight: 700;
+    }
+    .key { color: var(--cyan); }
+    .string { color: var(--yellow); }
+    .number { color: var(--orange); }
 
-    /* Endpoint Display */
+    /* Endpoint */
     .endpoint {
       background: rgba(0, 0, 0, 0.4);
       padding: 15px 20px;
@@ -621,7 +700,7 @@ app.get('/', (req, res) => {
     .method { color: var(--green); font-weight: 700; }
     .path { color: var(--yellow); }
 
-    /* How It Works */
+    /* Steps */
     .steps {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -630,30 +709,28 @@ app.get('/', (req, res) => {
     }
     .step {
       text-align: center;
-      padding: 20px;
+      padding: 25px 20px;
       background: rgba(0, 0, 0, 0.3);
       border-radius: 8px;
       border: 1px solid rgba(255, 255, 255, 0.1);
     }
     .step-number {
       font-family: 'Orbitron', sans-serif;
-      font-size: 2rem;
+      font-size: 2.5rem;
       font-weight: 900;
       background: linear-gradient(135deg, var(--orange), var(--yellow));
       -webkit-background-clip: text;
       background-clip: text;
       -webkit-text-fill-color: transparent;
-      margin-bottom: 10px;
     }
     .step-title {
       color: var(--cyan);
       font-weight: 700;
-      margin-bottom: 8px;
+      margin: 10px 0;
     }
     .step-desc {
       color: rgba(255, 255, 255, 0.7);
       font-size: 0.9rem;
-      line-height: 1.5;
     }
 
     /* Footer */
@@ -684,20 +761,27 @@ app.get('/', (req, res) => {
       font-size: 0.85rem;
     }
 
-    /* Spinner */
-    .spinner {
-      display: inline-block;
-      width: 20px;
-      height: 20px;
-      border: 2px solid rgba(0, 217, 255, 0.3);
-      border-top-color: var(--cyan);
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
-      margin-right: 10px;
-      vertical-align: middle;
+    /* Stats */
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 20px;
+      margin: 30px 0;
     }
-    @keyframes spin {
-      to { transform: rotate(360deg); }
+    .stat {
+      text-align: center;
+      padding: 20px;
+    }
+    .stat-value {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 2rem;
+      font-weight: 900;
+      color: var(--cyan);
+    }
+    .stat-label {
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 0.85rem;
+      margin-top: 5px;
     }
   </style>
 </head>
@@ -707,13 +791,26 @@ app.get('/', (req, res) => {
   <div class="container">
     <header class="header">
       <div class="logo-container">
-        <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' style='stop-color:%2300D9FF'/%3E%3Cstop offset='50%25' style='stop-color:%23FFD93D'/%3E%3Cstop offset='100%25' style='stop-color:%2300FF88'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='50' cy='50' r='45' fill='none' stroke='url(%23g)' stroke-width='4'/%3E%3Ctext x='50' y='62' font-family='Arial' font-size='40' font-weight='bold' fill='url(%23g)' text-anchor='middle'%3E🔮%3C/text%3E%3C/svg%3E" alt="GenVox" class="logo">
+        <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' style='stop-color:%2300D9FF'/%3E%3Cstop offset='50%25' style='stop-color:%23FFD93D'/%3E%3Cstop offset='100%25' style='stop-color:%2300FF88'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='50' cy='50' r='45' fill='none' stroke='url(%23g)' stroke-width='4'/%3E%3Ctext x='50' y='65' font-family='Arial' font-size='45' font-weight='bold' fill='url(%23g)' text-anchor='middle'%3E🔮%3C/text%3E%3C/svg%3E" alt="GenVox" class="logo">
         <div class="logo-text">GENVOX</div>
       </div>
       <p class="tagline">Crypto Sentiment API</p>
       <p class="subline">Real-time Reddit analysis • x402 Protocol • Base Network</p>
     </header>
 
+    <!-- Main CTA -->
+    <div class="cta-section">
+      <div class="cta-title">🚀 Try It Now</div>
+      <p class="cta-subtitle">Pay $0.03 USDC per query. No subscriptions. No API keys.</p>
+      <a href="https://www.x402scan.com/server/cd7fc186-0e68-4025-a005-2febc32b0650" class="btn btn-primary" target="_blank">
+        Launch on x402scan →
+      </a>
+      <a href="https://github.com/lobsterbar2027-boop/crypto-sentiment-api" class="btn btn-secondary" target="_blank">
+        View Docs
+      </a>
+    </div>
+
+    <!-- Pricing Card -->
     <div class="card">
       <div class="badge-row">
         <span class="badge">⛓️ Base Mainnet</span>
@@ -721,66 +818,106 @@ app.get('/', (req, res) => {
         <span class="badge badge-price">💰 $0.03 / query</span>
       </div>
       
-      <div id="walletInfo" class="wallet-info">
-        <span id="walletStatus" class="wallet-status">🔴 Wallet not connected</span>
-        <span id="walletAddress" class="wallet-address"></span>
-      </div>
-
       <div class="endpoint">
-        <span class="method">GET</span> <span class="path">/v1/sentiment/:coin</span>
+        <span class="method">GET</span> <span class="path">/v1/sentiment/{coin}</span>
       </div>
 
-      <p style="color: rgba(255,255,255,0.7); margin: 15px 0;">Select a cryptocurrency and pay with your wallet:</p>
-      
-      <div class="form-row">
-        <select id="coinSelect">
-          ${Object.keys(CRYPTO_SUBREDDITS).map(coin => '<option value="' + coin + '">' + coin + ' - ' + (COIN_NAMES[coin] || coin) + '</option>').join('')}
-        </select>
-        <button id="connectBtn" class="btn btn-secondary">Connect Wallet</button>
-        <button id="payBtn" class="btn btn-primary" disabled>Pay $0.03 → Get Sentiment</button>
+      <p style="color: rgba(255,255,255,0.8); margin: 20px 0;">Supported cryptocurrencies:</p>
+      <div class="coins">
+        ${supportedCoins}
       </div>
-
-      <div id="status"></div>
-      <pre id="result"></pre>
     </div>
 
+    <!-- Stats -->
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-value">$0.03</div>
+        <div class="stat-label">Per Query</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">12</div>
+        <div class="stat-label">Coins</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">&lt;5s</div>
+        <div class="stat-label">Response</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">100%</div>
+        <div class="stat-label">On-chain</div>
+      </div>
+    </div>
+
+    <!-- How It Works -->
     <div class="card">
       <div class="card-title">⚡ How It Works</div>
       <div class="steps">
         <div class="step">
           <div class="step-number">1</div>
-          <div class="step-title">Connect</div>
-          <div class="step-desc">Link your MetaMask or Coinbase Wallet</div>
+          <div class="step-title">Visit x402scan</div>
+          <div class="step-desc">Click "Launch on x402scan" above</div>
         </div>
         <div class="step">
           <div class="step-number">2</div>
-          <div class="step-title">Select</div>
-          <div class="step-desc">Choose a crypto to analyze</div>
+          <div class="step-title">Connect Wallet</div>
+          <div class="step-desc">MetaMask, Coinbase, or any wallet</div>
         </div>
         <div class="step">
           <div class="step-number">3</div>
-          <div class="step-title">Pay</div>
-          <div class="step-desc">Sign $0.03 USDC authorization</div>
+          <div class="step-title">Pay $0.03</div>
+          <div class="step-desc">Sign gasless USDC authorization</div>
         </div>
         <div class="step">
           <div class="step-number">4</div>
-          <div class="step-title">Analyze</div>
-          <div class="step-desc">Get instant Reddit sentiment</div>
+          <div class="step-title">Get Data</div>
+          <div class="step-desc">Instant sentiment analysis!</div>
         </div>
       </div>
     </div>
 
+    <!-- Example Response -->
     <div class="card">
-      <div class="card-title">📊 What You Get</div>
-      <ul style="padding-left: 25px; line-height: 2; color: rgba(255,255,255,0.8);">
-        <li><span style="color: var(--green)">✓</span> VADER sentiment analysis (social media optimized)</li>
-        <li><span style="color: var(--green)">✓</span> Engagement-weighted scoring</li>
-        <li><span style="color: var(--green)">✓</span> Multi-subreddit coverage</li>
+      <div class="card-title">📊 Example Response</div>
+      <p style="color: rgba(255,255,255,0.7); margin-bottom: 15px;">What you get for $0.03:</p>
+      <div class="example-response">
+        <div class="response-header">GET /v1/sentiment/BTC</div>
+<pre style="margin: 0; color: #e0e0e0;">{
+  <span class="key">"coin"</span>: <span class="string">"BTC"</span>,
+  <span class="key">"name"</span>: <span class="string">"Bitcoin"</span>,
+  
+  <span class="key">"summary"</span>: <span class="string">"📈 Bitcoin sentiment is BULLISH (score: 0.234) with 73% confidence based on 156 Reddit posts."</span>,
+  <span class="key">"signal"</span>: <span class="string">"BULLISH"</span>,
+  
+  <span class="key">"score"</span>: <span class="number">0.234</span>,
+  <span class="key">"scoreExplanation"</span>: <span class="string">"Moderate positive sentiment"</span>,
+  <span class="key">"confidence"</span>: <span class="number">0.73</span>,
+  <span class="key">"confidencePercent"</span>: <span class="string">"73%"</span>,
+  <span class="key">"postsAnalyzed"</span>: <span class="number">156</span>,
+  
+  <span class="key">"positivePercent"</span>: <span class="string">"61%"</span>,
+  <span class="key">"neutralPercent"</span>: <span class="string">"27%"</span>,
+  <span class="key">"negativePercent"</span>: <span class="string">"12%"</span>,
+  
+  <span class="key">"topPosts"</span>: [...],
+  <span class="key">"subredditsScanned"</span>: [<span class="string">"r/bitcoin"</span>, <span class="string">"r/BitcoinMarkets"</span>, ...]
+}</pre>
+      </div>
+    </div>
+
+    <!-- What You Get -->
+    <div class="card">
+      <div class="card-title">✨ What You Get</div>
+      <ul style="padding-left: 25px; line-height: 2.2; color: rgba(255,255,255,0.85);">
+        <li><span style="color: var(--green)">✓</span> Human-readable summary with emoji signal</li>
+        <li><span style="color: var(--green)">✓</span> VADER sentiment analysis (optimized for social media)</li>
+        <li><span style="color: var(--green)">✓</span> Confidence scores based on post volume</li>
+        <li><span style="color: var(--green)">✓</span> Percentage breakdown (positive/neutral/negative)</li>
         <li><span style="color: var(--green)">✓</span> Top posts driving sentiment</li>
-        <li><span style="color: var(--green)">✓</span> Confidence scores</li>
+        <li><span style="color: var(--green)">✓</span> Multi-subreddit coverage</li>
       </ul>
     </div>
 
+    <!-- Free Endpoints -->
     <div class="card">
       <div class="card-title">🆓 Free Endpoints</div>
       <div class="endpoint">
@@ -789,6 +926,30 @@ app.get('/', (req, res) => {
       <div class="endpoint">
         <span class="method">GET</span> <span class="path">/api</span> — API info (JSON)
       </div>
+    </div>
+
+    <!-- For Developers -->
+    <div class="card">
+      <div class="card-title">👨‍💻 For Developers</div>
+      <p style="color: rgba(255,255,255,0.8); margin-bottom: 15px;">Integrate with your trading bots, AI agents, or apps:</p>
+      <div class="example-response">
+<pre style="margin: 0; color: #e0e0e0;"><span style="color: var(--cyan)">// Using x402 client SDK</span>
+import { createX402Client } from '@x402/client';
+
+const client = createX402Client({
+  wallet: yourWallet,
+  network: 'base'
+});
+
+const sentiment = await client.fetch(
+  'https://crypto-sentiment-api-production.up.railway.app/v1/sentiment/ETH'
+);
+
+console.log(sentiment.signal); <span style="color: var(--cyan)">// "BULLISH"</span></pre>
+      </div>
+      <p style="color: rgba(255,255,255,0.6); margin-top: 15px; font-size: 0.9rem;">
+        See <a href="https://github.com/lobsterbar2027-boop/crypto-sentiment-api" style="color: var(--cyan);">GitHub</a> for full integration examples.
+      </p>
     </div>
 
     <footer>
@@ -802,257 +963,10 @@ app.get('/', (req, res) => {
       <p class="copyright">© 2026 GenVox • Built with x402 on Base</p>
     </footer>
   </div>
-
-  <script>
-    // State
-    let userAddress = null;
-    
-    // DOM elements
-    const connectBtn = document.getElementById('connectBtn');
-    const payBtn = document.getElementById('payBtn');
-    const coinSelect = document.getElementById('coinSelect');
-    const status = document.getElementById('status');
-    const result = document.getElementById('result');
-    const walletInfo = document.getElementById('walletInfo');
-    const walletStatus = document.getElementById('walletStatus');
-    const walletAddress = document.getElementById('walletAddress');
-    
-    // Base Mainnet chain ID
-    const BASE_CHAIN_ID = '0x2105';
-    
-    function setStatus(message, type = 'info') {
-      status.innerHTML = message;
-      status.className = type;
-    }
-    
-    function hasWallet() {
-      return typeof window.ethereum !== 'undefined';
-    }
-    
-    async function connectWallet() {
-      if (!hasWallet()) {
-        setStatus('⚠️ Please install MetaMask or Coinbase Wallet!', 'error');
-        return;
-      }
-      
-      try {
-        setStatus('<span class="spinner"></span> Connecting wallet...', 'info');
-        
-        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-        userAddress = accounts[0];
-        
-        const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-        if (chainId !== BASE_CHAIN_ID) {
-          setStatus('<span class="spinner"></span> Switching to Base network...', 'info');
-          try {
-            await window.ethereum.request({
-              method: 'wallet_switchEthereumChain',
-              params: [{ chainId: BASE_CHAIN_ID }],
-            });
-          } catch (switchError) {
-            if (switchError.code === 4902) {
-              await window.ethereum.request({
-                method: 'wallet_addEthereumChain',
-                params: [{
-                  chainId: BASE_CHAIN_ID,
-                  chainName: 'Base',
-                  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-                  rpcUrls: ['https://mainnet.base.org'],
-                  blockExplorerUrls: ['https://basescan.org'],
-                }],
-              });
-            } else {
-              throw switchError;
-            }
-          }
-        }
-        
-        walletInfo.className = 'wallet-info connected';
-        walletStatus.textContent = '🟢 Connected';
-        walletAddress.textContent = userAddress.slice(0, 6) + '...' + userAddress.slice(-4);
-        connectBtn.textContent = 'Connected ✓';
-        connectBtn.disabled = true;
-        payBtn.disabled = false;
-        setStatus('✅ Wallet connected! Ready to query.', 'success');
-        
-      } catch (error) {
-        console.error('Wallet connection error:', error);
-        setStatus('❌ Connection failed: ' + error.message, 'error');
-      }
-    }
-    
-    function generateNonce() {
-      const array = new Uint8Array(32);
-      crypto.getRandomValues(array);
-      return '0x' + Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
-    }
-    
-    async function payAndGetSentiment() {
-      const coin = coinSelect.value;
-      
-      try {
-        payBtn.disabled = true;
-        setStatus('<span class="spinner"></span> Fetching payment requirements...', 'info');
-        result.style.display = 'none';
-        
-        const initialResponse = await fetch('/v1/sentiment/' + coin);
-        
-        if (initialResponse.ok) {
-          const data = await initialResponse.json();
-          result.textContent = JSON.stringify(data, null, 2);
-          result.style.display = 'block';
-          setStatus('✅ Data retrieved!', 'success');
-          payBtn.disabled = false;
-          return;
-        }
-        
-        if (initialResponse.status !== 402) {
-          throw new Error('Unexpected response: ' + initialResponse.status);
-        }
-        
-        const paymentRequiredHeader = initialResponse.headers.get('X-Payment') || 
-                                      initialResponse.headers.get('x-payment') ||
-                                      initialResponse.headers.get('Payment-Required') ||
-                                      initialResponse.headers.get('payment-required');
-        
-        if (!paymentRequiredHeader) {
-          throw new Error('No payment requirements in response');
-        }
-        
-        const requirements = JSON.parse(atob(paymentRequiredHeader));
-        const accepts = requirements.accepts[0];
-        if (!accepts) {
-          throw new Error('No accepted payment methods');
-        }
-        
-        setStatus('<span class="spinner"></span> Preparing payment...', 'info');
-        
-        const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
-        const payTo = accepts.payTo;
-        const amount = accepts.amount;
-        const validAfter = 0;
-        const validBefore = Math.floor(Date.now() / 1000) + 3600;
-        const nonce = generateNonce();
-        
-        const typedData = {
-          types: {
-            EIP712Domain: [
-              { name: 'name', type: 'string' },
-              { name: 'version', type: 'string' },
-              { name: 'chainId', type: 'uint256' },
-              { name: 'verifyingContract', type: 'address' }
-            ],
-            TransferWithAuthorization: [
-              { name: 'from', type: 'address' },
-              { name: 'to', type: 'address' },
-              { name: 'value', type: 'uint256' },
-              { name: 'validAfter', type: 'uint256' },
-              { name: 'validBefore', type: 'uint256' },
-              { name: 'nonce', type: 'bytes32' }
-            ]
-          },
-          primaryType: 'TransferWithAuthorization',
-          domain: {
-            name: accepts.extra?.name || 'USD Coin',
-            version: accepts.extra?.version || '2',
-            chainId: 8453,
-            verifyingContract: accepts.asset || USDC_ADDRESS
-          },
-          message: {
-            from: userAddress,
-            to: payTo,
-            value: amount,
-            validAfter: validAfter,
-            validBefore: validBefore,
-            nonce: nonce
-          }
-        };
-        
-        setStatus('🔐 Please sign the payment in your wallet...', 'info');
-        
-        const signature = await window.ethereum.request({
-          method: 'eth_signTypedData_v4',
-          params: [userAddress, JSON.stringify(typedData)]
-        });
-        
-        setStatus('<span class="spinner"></span> Payment signed! Fetching data...', 'info');
-        
-        const paymentPayload = {
-          x402Version: 2,
-          scheme: 'exact',
-          network: accepts.network,
-          payload: {
-            signature: signature,
-            authorization: {
-              from: userAddress,
-              to: payTo,
-              value: amount,
-              validAfter: validAfter,
-              validBefore: validBefore,
-              nonce: nonce
-            }
-          }
-        };
-        
-        const paymentHeader = btoa(JSON.stringify(paymentPayload));
-        
-        const paidResponse = await fetch('/v1/sentiment/' + coin, {
-          headers: { 'X-Payment': paymentHeader }
-        });
-        
-        if (!paidResponse.ok) {
-          const errorText = await paidResponse.text();
-          throw new Error('Payment failed: ' + paidResponse.status + ' - ' + errorText);
-        }
-        
-        const data = await paidResponse.json();
-        result.textContent = JSON.stringify(data, null, 2);
-        result.style.display = 'block';
-        setStatus('🎉 Success! Here is your ' + coin + ' sentiment analysis:', 'success');
-        
-      } catch (error) {
-        console.error('Payment error:', error);
-        setStatus('❌ Error: ' + error.message, 'error');
-      } finally {
-        payBtn.disabled = false;
-      }
-    }
-    
-    connectBtn.addEventListener('click', connectWallet);
-    payBtn.addEventListener('click', payAndGetSentiment);
-    
-    if (hasWallet() && window.ethereum.selectedAddress) {
-      userAddress = window.ethereum.selectedAddress;
-      walletInfo.className = 'wallet-info connected';
-      walletStatus.textContent = '🟢 Connected';
-      walletAddress.textContent = userAddress.slice(0, 6) + '...' + userAddress.slice(-4);
-      connectBtn.textContent = 'Connected ✓';
-      connectBtn.disabled = true;
-      payBtn.disabled = false;
-    }
-    
-    if (hasWallet()) {
-      window.ethereum.on('accountsChanged', (accounts) => {
-        if (accounts.length === 0) {
-          userAddress = null;
-          walletInfo.className = 'wallet-info';
-          walletStatus.textContent = '🔴 Wallet not connected';
-          walletAddress.textContent = '';
-          connectBtn.textContent = 'Connect Wallet';
-          connectBtn.disabled = false;
-          payBtn.disabled = true;
-        } else {
-          userAddress = accounts[0];
-          walletAddress.textContent = userAddress.slice(0, 6) + '...' + userAddress.slice(-4);
-        }
-      });
-    }
-  </script>
 </body>
 </html>
   `);
 });
-
 // ============================================
 // PROTECTED ENDPOINT - Requires x402 Payment
 // ============================================
