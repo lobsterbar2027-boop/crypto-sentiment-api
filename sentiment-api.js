@@ -1092,14 +1092,51 @@ async function getSentiment(coin) {
 
 // POST /v1/sentiment - x402scan sends coin in body
 app.post('/v1/sentiment', async (req, res) => {
-  const coin = req.body?.coin || 'BTC';
+  // Log everything to debug x402scan input
+  console.log('\n📥 POST /v1/sentiment received:');
+  console.log('   Body:', JSON.stringify(req.body));
+  console.log('   Query:', JSON.stringify(req.query));
+  console.log('   Headers content-type:', req.headers['content-type']);
+  
+  // Try multiple ways to get the coin parameter
+  let coin = 'BTC'; // default
+  
+  // Check body (most likely)
+  if (req.body?.coin) {
+    coin = req.body.coin;
+    console.log('   Found coin in body:', coin);
+  } 
+  // Check if body is the coin directly (string)
+  else if (typeof req.body === 'string') {
+    coin = req.body;
+    console.log('   Found coin as body string:', coin);
+  }
+  // Check query params
+  else if (req.query?.coin) {
+    coin = req.query.coin;
+    console.log('   Found coin in query:', coin);
+  }
+  // Check for nested input object (some APIs use this)
+  else if (req.body?.input?.coin) {
+    coin = req.body.input.coin;
+    console.log('   Found coin in body.input:', coin);
+  }
+  else {
+    console.log('   No coin found, using default BTC');
+  }
+  
   const result = await getSentiment(coin);
   res.json(result);
 });
 
 // GET /v1/sentiment - for x402scan testing (defaults to BTC)
 app.get('/v1/sentiment', async (req, res) => {
+  console.log('\n📥 GET /v1/sentiment received:');
+  console.log('   Query:', JSON.stringify(req.query));
+  
   const coin = req.query?.coin || 'BTC';
+  console.log('   Using coin:', coin);
+  
   const result = await getSentiment(coin);
   res.json(result);
 });
