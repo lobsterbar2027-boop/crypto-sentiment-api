@@ -322,6 +322,17 @@ function analyzeWithVader(posts, coin) {
     topPosts: analyzedPosts.slice(0, 5),
   };
 }
+// RapidAPI authentication bypass
+app.use('/v1/sentiment', (req, res, next) => {
+  const rapidApiKey = req.headers['x-rapidapi-key'];
+  const rapidApiHost = req.headers['x-rapidapi-host'];
+  if (rapidApiKey && rapidApiHost) {
+    req.authMethod = 'rapidapi';
+    req.skipX402 = true;
+    console.log(`   🚀 RapidAPI request authenticated`);
+  }
+  next();
+});
 
 // ============================================
 // x402 v2 PAYMENT MIDDLEWARE
